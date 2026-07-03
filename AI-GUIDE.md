@@ -35,6 +35,34 @@ common jobs and - just as important - the guardrails that keep grades safe.
 | Find junk / dup / misnamed repos | `tools/org-audit.mjs` | Read-only; proposes renames/deletes |
 | Sync activity points from Canvas | `tools/canvas-pull-points.mjs` | Read-only; writes `totalPoints` only with `--execute` |
 | Make grades back into a CSV | `tools/canvas-export.mjs` | Offline alternative to the API push |
+| Publish course material to students | `publish-material.yml` | Copies a unit's `content/` into every workspace; instructor zone only, never the student zone |
+| Check repo names for typos / wrong section | `audit-names.yml` | Read-only; flags misnamed repos and blank `student.json` |
+| Provision missing workspaces / backfill `student.json` | `provision-workspaces.yml` (dry run, then `execute`) | Creates a workspace for any student who has activities but none; fills a blank `student.json` from their own submissions; never deletes or renames |
+| Clean stale gradebook rows | `prune-gradebook.yml` (dry run, then `execute`) | Drops rows whose submission repo was deleted/renamed (404); commits `grades.csv` + `GRADEBOOK.md` |
+
+## Housekeeping & content (ask in plain language)
+
+Not everything is a single workflow. These are the "help me keep this tidy and
+correct" jobs the assistant is good at - ask for a **read-only check first**,
+then approve any changes:
+
+- **"Audit my whole org for hygiene"** - malformed names, duplicate submissions,
+  studentNumber collisions, junk/sample repos, blank `student.json`. Start with
+  `tools/org-audit.mjs` (read-only) before fixing anything.
+- **"Reorganize / rename these repos"** - the assistant proposes the renames;
+  you approve. Renames are fine; **deletes stay manual** (see the guardrails).
+- **"Check my content for a unit"** - read `content/<unit>/` for gaps, broken
+  links, inconsistent naming, or an activity stub that accidentally gives away
+  the answer. Ask it to report, not rewrite, unless you say so.
+- **"Review this `RUBRIC.md` / `class-prompt.md`"** - sanity-check weights,
+  clarity, and that the AI-feedback prompt matches the class level, before a
+  grade run uses it.
+- **"Add a new AI-graded activity"** - set the flags in
+  `grader/assignments.json`, add `grader/<id>/RUBRIC.md`, and distribute that
+  rubric to the activity template + existing submission repos.
+- **"Confirm my engine is consistent"** - verify the shared `tools/*.mjs` are
+  byte-identical across your teacher repos (nothing class-specific hardcoded;
+  config lives in `course.config.json`).
 
 ## Guardrails worth knowing
 
