@@ -49,8 +49,9 @@ How it behaves:
 ### AI feedback flags
 
 These turn on AI-drafted feedback (and a proposed total grade) for an activity;
-see `AI-GUIDE.md` for the full behaviour. They do not change what is exported to
-Canvas - the proposed score stays a draft for you to review.
+see `docs/grading-and-feedback.md` in the platform docs for the full behaviour.
+They do not change what is exported to Canvas - the proposed score stays a draft
+for you to review.
 
 - `"publish": true` - deliver this activity's grades + feedback to student repos
   on the next `publish.yml` run (default false). Grading is teacher-side only;

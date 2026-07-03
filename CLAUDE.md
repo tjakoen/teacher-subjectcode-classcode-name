@@ -3,11 +3,17 @@
 This is a live teacher control center. An AI coding assistant (e.g. Claude Code)
 is expected to drive it: you describe what you want in plain language, it runs
 the repo's tools and GitHub Actions. This file is the assistant's standing
-instructions. The human-facing walkthrough is [AI-GUIDE.md](AI-GUIDE.md); the
-one-time setup is [SETUP.md](SETUP.md); how to author new graded activities is
-[ACTIVITY-AUTHORING.md](ACTIVITY-AUTHORING.md); the chronological "how this runs
-in a real class, and how you prove it works" story is
-[IN-PRACTICE.md](IN-PRACTICE.md).
+instructions and stays in this repo (it is read in-context).
+
+The full platform documentation is the **single source of truth** and lives in the
+platform repo's `docs/` set
+(<https://github.com/tjakoen/github-native-course-platform/tree/main/docs>):
+operating with an AI assistant (`docs/operating-with-ai.md`), one-time setup
+(`docs/getting-started.md`), authoring graded activities
+(`docs/authoring-activities.md`), and the chronological "how this runs in a real
+class" story (`docs/running-a-course.md`). The `SETUP.md` / `AI-GUIDE.md` /
+`ACTIVITY-AUTHORING.md` / `IN-PRACTICE.md` files in this repo are short pointers to
+those pages.
 
 ## What this repo is
 
@@ -57,4 +63,5 @@ change a value.
 - Always `node --check` a changed `.mjs` before committing.
 - Prefer one efficient sweep/push over many tiny runs (it costs Actions minutes).
 
-See [AI-GUIDE.md](AI-GUIDE.md) for the common jobs and how to ask for them.
+See `docs/operating-with-ai.md` in the platform docs for the common jobs and how
+to ask for them.
