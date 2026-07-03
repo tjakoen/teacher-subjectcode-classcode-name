@@ -21,6 +21,12 @@ common jobs and - just as important - the guardrails that keep grades safe.
   approve the real run. Every grade-affecting tool defaults to safe.
 - **Nothing is deleted for you.** The assistant can rename and edit, but
   deleting student repos is left to you (it's irreversible).
+- **The org owns every repo; the student is admin of their own.** The org must
+  own each repo so the engine can grade it and deliver results; within that,
+  each student is the legitimate admin of *their* repos. Only teachers should be
+  org owners or hold admin on the infrastructure repos (this control center,
+  solutions, templates), and no student should be able to reach another
+  student's repo. The audit checks all of this (see below).
 
 ## Common jobs (just ask for these in your own words)
 
@@ -32,7 +38,7 @@ common jobs and - just as important - the guardrails that keep grades safe.
 | Reconcile roster vs `student.json` | `canvas-push.yml` mode `check` | Read-only; lists who won't match |
 | Push grades to Canvas | `canvas-push.yml` mode `execute` | Idempotent; overwrites unlocked grades |
 | Post feedback comments | push with `comment=true` | De-duplicated; safe to re-run |
-| Find junk / dup / misnamed repos | `tools/org-audit.mjs` | Read-only; proposes renames/deletes |
+| Audit repo hygiene and access | `tools/org-audit.mjs` | Read-only; junk/dup/misnamed repos plus an access pass (who can reach what) |
 | Sync activity points from Canvas | `tools/canvas-pull-points.mjs` | Read-only; writes `totalPoints` only with `--execute` |
 | Make grades back into a CSV | `tools/canvas-export.mjs` | Offline alternative to the API push |
 | Publish course material to students | `publish-material.yml` | Copies a unit's `content/` into every workspace; instructor zone only, never the student zone |
@@ -49,6 +55,17 @@ then approve any changes:
 - **"Audit my whole org for hygiene"** - malformed names, duplicate submissions,
   studentNumber collisions, junk/sample repos, blank `student.json`. Start with
   `tools/org-audit.mjs` (read-only) before fixing anything.
+- **"Audit who can access what"** - the same `tools/org-audit.mjs` ends with an
+  **access pass**: rogue org owners (anyone but a teacher), non-teacher access on
+  infrastructure repos (this control center, solutions, templates, demos), a
+  student repo shared with a second non-teacher account (a peer may be able to
+  see it), a workspace with **no** student collaborator (delivered grades would
+  be invisible to the student), and a permissive org base permission (members
+  seeing repos they were never added to). Set `teachers` in `course.config.json`
+  so your own accounts are recognized. **Fixes stay manual:** demoting an org
+  owner needs the `admin:org` scope (`gh auth refresh -h github.com -s
+  admin:org`) and a human; adding a student back to their own workspace is a
+  `gh api` collaborator call you approve.
 - **"Reorganize / rename these repos"** - the assistant proposes the renames;
   you approve. Renames are fine; **deletes stay manual** (see the guardrails).
 - **"Check my content for a unit"** - read `content/<unit>/` for gaps, broken

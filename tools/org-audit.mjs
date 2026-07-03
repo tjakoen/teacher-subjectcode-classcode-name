@@ -113,3 +113,91 @@ for (const org of ORGS) {
   const blanks = cats.activity.filter((n) => !num(ids[n]) && !gh(ids[n]));
   if (blanks.length) console.log(`\nBLANK student.json on real activity repos: ${blanks.length} (most are rescued by consolidation; the push report is the source of truth for who is actually unmatched)`);
 }
+
+
+// ======================== ACCESS AUDIT ========================
+// Who can reach what. Policy: the ORG owns every repo (so the engine can grade
+// and deliver), but each student is the legitimate ADMIN of their OWN repos.
+// Only teachers may be org owners or hold admin on infrastructure repos, and no
+// student should reach another student's repo. Signals are collaborator-based
+// (ground truth), not name-based, because repo-name handles and student.json
+// rarely equal the real GitHub login. Flags: rogue org owners, non-teacher
+// access on teacher/solution/template/demo repos, a student repo shared with
+// 2+ non-teacher accounts (possible peer access), a workspace with no student
+// collaborator at all (nobody can see delivered grades), and permissive org
+// base permissions.
+await (async () => {
+  const TEACHERS = new Set((loadConfig().teachers || []).map((t) => String(t).toLowerCase()));
+  const gql = async (query, variables) => {
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (!res.ok) throw new Error(`graphql ${res.status}`);
+    const j = await res.json();
+    if (j.errors) throw new Error(`graphql: ${j.errors.map((e) => e.message).join("; ")}`);
+    return j.data;
+  };
+  const ACCESS_QUERY = `
+    query($org:String!, $cursor:String) {
+      organization(login:$org) {
+        repositories(first:50, after:$cursor, ownerAffiliations: OWNER) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            name
+            collaborators(affiliation: DIRECT, first: 100) { edges { permission node { login } } }
+          }
+        }
+      }
+    }`;
+
+  console.log(`\n########################  ACCESS AUDIT  ########################`);
+  if (!TEACHERS.size) console.log("(!) no teachers configured - set `teachers` in course.config.json, or every admin looks foreign");
+
+  for (const org of ORGS) {
+    const meta = await api(`/orgs/${org}`);
+    const base = meta?.default_repository_permission || "?";
+    const admins = (await api(`/orgs/${org}/members?role=admin`)) || [];
+    const rogueOwners = admins.map((a) => a.login).filter((l) => !TEACHERS.has(l.toLowerCase()));
+
+    const repos = [];
+    let cursor = null;
+    do {
+      let d;
+      try { d = await gql(ACCESS_QUERY, { org, cursor }); }
+      catch (e) { console.error(`  ! ${org}: access query failed (${e.message})`); break; }
+      const page = d?.organization?.repositories;
+      if (!page) break;
+      for (const r of page.nodes) {
+        repos.push({
+          name: r.name,
+          collabs: (r.collaborators?.edges || []).map((e) => ({ login: e.node.login.toLowerCase(), perm: e.permission })),
+        });
+      }
+      cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    } while (cursor);
+
+    const infraAccess = [], shared = [], orphan = [];
+    for (const r of repos) {
+      const nonTeacher = r.collabs.filter((c) => !TEACHERS.has(c.login));
+      if (isTeacher(r.name) || isSolution(r.name) || isTemplate(r.name) || isDemo(r.name)) {
+        nonTeacher.forEach((c) => infraAccess.push(`${r.name}  <- ${c.login} (${c.perm})`));
+        continue;
+      }
+      const isWs = !!wsOK(r.name);
+      if (!isWs && !actOK(r.name)) continue; // hygiene pass covers junk/malformed
+      const people = [...new Set(nonTeacher.map((c) => c.login))];
+      if (people.length >= 2) shared.push(`${r.name}  <- ${nonTeacher.map((c) => `${c.login}(${c.perm})`).join(", ")}`);
+      if (isWs && people.length === 0) orphan.push(r.name);
+    }
+
+    console.log(`\n---------------- ${org} ----------------`);
+    console.log(`members' base repo permission: ${base}${base !== "none" && base !== "?" ? "   (!) members can reach repos they are not collaborators on" : ""}`);
+    console.log(rogueOwners.length ? `ROGUE ORG OWNERS (should be teachers only): ${rogueOwners.join(", ")}` : "org owners: teachers only");
+    if (infraAccess.length) { console.log(`NON-TEACHER ACCESS on infrastructure repos (${infraAccess.length}):`); infraAccess.forEach((s) => console.log(`  ${s}`)); }
+    if (shared.length) { console.log(`SHARED ACCESS - student repo with 2+ non-teacher accounts, a peer may see it (${shared.length}):`); shared.forEach((s) => console.log(`  ${s}`)); }
+    if (orphan.length) { console.log(`NO STUDENT ACCESS - workspace has no student collaborator, delivered grades are invisible (${orphan.length}):`); orphan.forEach((s) => console.log(`  ${s}`)); }
+    if (!infraAccess.length && !shared.length && !orphan.length && !rogueOwners.length) console.log("access: clean");
+  }
+})();
