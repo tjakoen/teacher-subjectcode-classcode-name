@@ -3,6 +3,10 @@
 Everything you do once per course, in order. Student repos need nothing but a
 filled-in `student.json` (covered in §5 and in the student repo's README).
 
+> This file is the settings reference. For the chronological, first-run story -
+> the order you actually go in and how you *prove* each step works before real
+> grades depend on it - see [IN-PRACTICE.md](IN-PRACTICE.md).
+
 Naming everywhere uses **literal lowercase values, no angle brackets**:
 `teacher-6xxx-0000-instructor`, `student-6xxx-0000-juandelacruz`.
 
