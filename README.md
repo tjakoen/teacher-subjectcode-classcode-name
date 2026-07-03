@@ -48,4 +48,4 @@ is fixed to this repo's class.
 Example: publish folder content/m1-intro/.
 
 ---
-🤖 **Built with Claude — I don't prompt and pray, I prompt and prove.** Every commit here is co-authored with an AI, on purpose. [How I actually work with AI, receipts and all →](https://tjakoen.github.io/notes/professional-vibe-coder)
+🤖 **Built by [tjakoen](https://github.com/tjakoen) with Claude — I don't prompt and pray, I prompt and prove.** Every commit here is co-authored with an AI, on purpose. [How I actually work with AI, receipts and all →](https://tjakoen.github.io/notes/professional-vibe-coder)
