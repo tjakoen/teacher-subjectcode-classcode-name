@@ -1,10 +1,13 @@
-# CLAUDE.md — operating this course with an AI assistant
+# CLAUDE.md - operating this course with an AI assistant
 
 This is a live teacher control center. An AI coding assistant (e.g. Claude Code)
 is expected to drive it: you describe what you want in plain language, it runs
 the repo's tools and GitHub Actions. This file is the assistant's standing
 instructions. The human-facing walkthrough is [AI-GUIDE.md](AI-GUIDE.md); the
-one-time setup is [SETUP.md](SETUP.md).
+one-time setup is [SETUP.md](SETUP.md); how to author new graded activities is
+[ACTIVITY-AUTHORING.md](ACTIVITY-AUTHORING.md); the chronological "how this runs
+in a real class, and how you prove it works" story is
+[IN-PRACTICE.md](IN-PRACTICE.md).
 
 ## What this repo is
 
@@ -28,7 +31,7 @@ delivers results to them only through a deliberate publish step.
 5. **No student PII in chat responses.** Names, numbers, and emails stay in the
    repo, not in conversation.
 6. **When data is ambiguous** (e.g. two repos with the same student number),
-   record it in `gradebook/FLAGS.md` for the instructor to resolve — do not
+   record it in `gradebook/FLAGS.md` for the instructor to resolve - do not
    guess, a wrong guess misattributes a grade.
 7. **Access is deliberate.** The org owns every repo so the engine can grade and
    deliver; within that, each student is the admin of their own repos and no one
@@ -44,7 +47,7 @@ Class-specific values live in **`course.config.json`** (orgs, `teachers` for the
 access audit, workspace template owner) and each workflow's `SECTION` /
 `WORKSPACE_PREFIX` env, plus the
 `CANVAS_TOKEN` / `CANVAS_BASE_URL` / `ORG_PAT` / `MODELS_PAT` secrets. Nothing
-class-specific is hardcoded in `tools/` — read config, do not edit the tools to
+class-specific is hardcoded in `tools/` - read config, do not edit the tools to
 change a value.
 
 ## Conventions

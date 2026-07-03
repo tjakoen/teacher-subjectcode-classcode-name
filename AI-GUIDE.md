@@ -74,9 +74,12 @@ then approve any changes:
 - **"Review this `RUBRIC.md` / `class-prompt.md`"** - sanity-check weights,
   clarity, and that the AI-feedback prompt matches the class level, before a
   grade run uses it.
-- **"Add a new AI-graded activity"** - set the flags in
-  `grader/assignments.json`, add `grader/<id>/RUBRIC.md`, and distribute that
-  rubric to the activity template + existing submission repos.
+- **"Add a new activity"** - the full how-to (test-only and AI-graded, all three
+  stacks) is in [ACTIVITY-AUTHORING.md](ACTIVITY-AUTHORING.md). In short: for a
+  plain activity, add an entry to `grader/assignments.json` and canonical tests
+  under `grader/<id>/`; to make it AI-graded, also set the flags, add
+  `grader/<id>/RUBRIC.md`, and distribute that rubric to the activity template +
+  existing submission repos.
 - **"Confirm my engine is consistent"** - verify the shared `tools/*.mjs` are
   byte-identical across your teacher repos (nothing class-specific hardcoded;
   config lives in `course.config.json`).
