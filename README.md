@@ -1,7 +1,7 @@
 # 🎛️ Teacher repo - instructor control center
 
 [![Made with Claude](https://img.shields.io/badge/Made_with-Claude-D97757?logo=anthropic&logoColor=white)](https://tjakoen.github.io/notes/ten-times-zero)
-[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-2ea44f)](LICENSE)
 ![Node.js](https://img.shields.io/badge/Node.js-5FA04E?logo=nodedotjs&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=githubactions&logoColor=white)
 ![Runtime deps: 0](https://img.shields.io/badge/runtime_deps-0-2ea44f)
@@ -49,4 +49,4 @@ is fixed to this repo's class.
 Example: publish folder content/m1-intro/.
 
 ---
-🤖 **Built by [tjakoen](https://github.com/tjakoen) with Claude — I don't prompt and pray, I prompt and prove.** Every commit here is co-authored with an AI, on purpose. [How I actually work with AI, receipts and all →](https://tjakoen.github.io/notes/ten-times-zero)
+🎓 **Built on the [GitHub-Native Course Platform](https://github.com/tjakoen/github-native-course-platform), created by [tjakoen](https://github.com/tjakoen) with Claude.** Free to adopt under Apache-2.0; the NOTICE attribution to the original author must be kept. [How the platform uses AI →](https://tjakoen.github.io/notes/ten-times-zero)
