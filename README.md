@@ -1,6 +1,6 @@
 # 🎛️ Teacher repo - instructor control center
 
-[![Made with Claude](https://img.shields.io/badge/Made_with-Claude-D97757?logo=anthropic&logoColor=white)](https://tjakoen.github.io/notes/professional-vibe-coder)
+[![Made with Claude](https://img.shields.io/badge/Made_with-Claude-D97757?logo=anthropic&logoColor=white)](https://tjakoen.github.io/notes/ten-times-zero)
 ![Node.js](https://img.shields.io/badge/Node.js-5FA04E?logo=nodedotjs&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=githubactions&logoColor=white)
 ![Runtime deps: 0](https://img.shields.io/badge/runtime_deps-0-2ea44f)
@@ -48,4 +48,4 @@ is fixed to this repo's class.
 Example: publish folder content/m1-intro/.
 
 ---
-🤖 **Built by [tjakoen](https://github.com/tjakoen) with Claude — I don't prompt and pray, I prompt and prove.** Every commit here is co-authored with an AI, on purpose. [How I actually work with AI, receipts and all →](https://tjakoen.github.io/notes/professional-vibe-coder) · [How I use AI in teaching →](https://tjakoen.github.io/notes/how-i-use-ai-in-teaching)
+🤖 **Built by [tjakoen](https://github.com/tjakoen) with Claude — I don't prompt and pray, I prompt and prove.** Every commit here is co-authored with an AI, on purpose. [How I actually work with AI, receipts and all →](https://tjakoen.github.io/notes/ten-times-zero)
