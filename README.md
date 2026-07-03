@@ -1,4 +1,11 @@
-# Teacher repo - instructor control center
+# 🎛️ Teacher repo - instructor control center
+
+[![Made with Claude](https://img.shields.io/badge/Made_with-Claude-D97757?logo=anthropic&logoColor=white)](https://tjakoen.github.io/notes/professional-vibe-coder)
+![Node.js](https://img.shields.io/badge/Node.js-5FA04E?logo=nodedotjs&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=githubactions&logoColor=white)
+![Runtime deps: 0](https://img.shields.io/badge/runtime_deps-0-2ea44f)
+![Build step: none](https://img.shields.io/badge/build_step-none-2ea44f)
+![LMS: Canvas](https://img.shields.io/badge/LMS-Canvas-E13223)
 
 The control center for one course org. Everything is driven from the
 **Actions tab** (workflow_dispatch forms) - there is no hosted UI. See the
@@ -41,7 +48,4 @@ is fixed to this repo's class.
 Example: publish folder content/m1-intro/.
 
 ---
-
-[![Made with Claude](https://img.shields.io/badge/Made_with-Claude-D97757)](https://claude.com/claude-code)
-
-Built with the help of Claude (Anthropic), shared in the interest of transparency.
+🤖 **Built with Claude — I don't prompt and pray, I prompt and prove.** Every commit here is co-authored with an AI, on purpose. [How I actually work with AI, receipts and all →](https://tjakoen.github.io/notes/professional-vibe-coder)
