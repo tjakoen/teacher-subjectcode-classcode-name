@@ -248,6 +248,11 @@ for (const a of assignments) {
     gradedThisRun.add(`${repo}|${a.id}`); // genuinely (re)graded now -> eligible for AI notes
     const flags = `${late ? " LATE" : ""}${res.malformed ? " MALFORMED(wrong-template?)" : ""}`;
     console.log(`${dryRun ? "[dry-run] " : ""}grade ${repo} (${a.id}): ${score}${flags}`);
+    // Free the runner disk as we go: per-repo node_modules/.dart_tool add up
+    // to "No space left on device" over a big section (the 07-08 2125 sweep
+    // died that way). Source clones stay - previews/AI notes read them later.
+    rmSync(`${dir}/node_modules`, { recursive: true, force: true });
+    rmSync(`${dir}/.dart_tool`, { recursive: true, force: true });
   }
 }
 
