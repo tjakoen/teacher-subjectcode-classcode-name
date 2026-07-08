@@ -245,7 +245,7 @@ export async function aiNotes(row, a, { work = ".grade-work", previewDir } = {})
         vibe,
       ].join(" ");
 
-  const userText = [
+  const buildUserText = (codeCap) => [
     classPrompt() && `Class context:\n${classPrompt()}`,
     rubric && `Grading rubric for this activity (ground your feedback and the proposed grade in this):\n${rubric}`,
     `Activity ${a.id}, worth ${total} points. Raw automated tests so far: ${row.score} - this is the raw test count, NOT the rubric's automated points; translate it per the rubric's weighted line items.`,
@@ -254,12 +254,15 @@ export async function aiNotes(row, a, { work = ".grade-work", previewDir } = {})
       : "This is a short exercise.",
     stylingRule,
     failList ? `Automated checks that did not pass:\n${failList}` : "All automated checks passed.",
-    `Student source:\n${collectSourceFiles(clone)}`,
+    `Student source:\n${collectSourceFiles(clone, codeCap)}`,
     `Output format:\n${format}`,
   ].filter(Boolean).join("\n\n");
 
-  const content = [{ type: "text", text: userText }];
-  for (const img of shots) content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${img.b64}` } });
+  const withImages = (userText) => {
+    const c = [{ type: "text", text: userText }];
+    for (const img of shots) c.push({ type: "image_url", image_url: { url: `data:image/png;base64,${img.b64}` } });
+    return c;
+  };
 
   let text;
   try {
@@ -267,14 +270,17 @@ export async function aiNotes(row, a, { work = ".grade-work", previewDir } = {})
       model: MODELS_NAME, temperature: 0.4, max_tokens: 800,
       messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: msgContent }],
     });
-    let res = await ask(content);
-    // Screenshots dominate the request body, so a large app plus its shots can
-    // exceed the API's request-size limit (HTTP 413). Retry once code-only so
-    // feedback is still produced - the design just cannot be judged from the
-    // screenshot in that case.
-    if (res.status === 413 && shots.length) {
-      console.log(`  notes: ${row.repo} (${a.id}) oversized with screenshot(s); retrying code-only`);
-      res = await ask(content.filter((c) => c.type === "text"));
+    // GitHub Models caps request size (HTTP 413); the free tier only allows a
+    // few thousand input tokens. A large app (many components) plus its base64
+    // screenshots overflows it, so degrade the payload step by step rather than
+    // drop the grade: full code + screenshots -> trimmed code, no screenshots
+    // -> minimal code. Screenshots go first (they cost the most and only inform
+    // the design half).
+    const attempts = [withImages(buildUserText(24000)), buildUserText(9000), buildUserText(4000)];
+    let res = await ask(attempts[0]);
+    for (let k = 1; k < attempts.length && res.status === 413; k++) {
+      console.log(`  notes: ${row.repo} (${a.id}) oversized (413); retrying smaller payload`);
+      res = await ask(attempts[k]);
     }
     if (!res.ok) { console.log(`  notes: ${row.repo} (${a.id}) skipped (HTTP ${res.status})`); return blank; }
     const j = await res.json();
