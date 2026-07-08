@@ -208,9 +208,9 @@ for (const a of assignments) {
     // A clone can fail transiently (network / secondary rate limit) or for a
     // genuinely broken repo. Don't let one bad clone abort the whole sweep -
     // skip it this run (it gets picked up next time), with one quick retry.
-    try { quiet(`gh repo clone ${OWNER}/${repo} ${dir} -- -q`); }
+    try { quiet(`gh repo clone ${OWNER}/${repo} ${dir} -- -q --depth=1`); }
     catch {
-      try { quiet(`gh repo clone ${OWNER}/${repo} ${dir} -- -q`); }
+      try { quiet(`gh repo clone ${OWNER}/${repo} ${dir} -- -q --depth=1`); }
       catch { console.log(`skip  ${repo} (${a.id}) - clone failed (transient or broken); will retry next run`); continue; }
     }
     // Submission sha = latest commit touching anything other than the receipt
