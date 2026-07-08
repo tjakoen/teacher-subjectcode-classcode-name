@@ -31,9 +31,12 @@ if (!section) {
   process.exit(1);
 }
 
+// Every child command gets a 10-minute ceiling: one pathological repo (an
+// infinite loop hit while tests load, a wedged npm/dart fetch) must fail and
+// score 0, not stall execSync until the runner's 6-hour kill eats the sweep.
 const sh = (cmd, opts = {}) =>
-  execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts }).trim();
-const quiet = (cmd, opts = {}) => execSync(cmd, { stdio: "ignore", ...opts });
+  execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 600_000, ...opts }).trim();
+const quiet = (cmd, opts = {}) => execSync(cmd, { stdio: "ignore", timeout: 600_000, ...opts });
 
 // In Actions, set GRADE_OWNER to the org (github.repository_owner); locally it
 // falls back to the authenticated gh user.
@@ -117,8 +120,9 @@ function gradeVitest(dir, id) {
   }
   try {
     quiet("npx vitest run --reporter=json --outputFile=.vit.json", { cwd: dir });
-  } catch {
+  } catch (e) {
     /* tests failing -> non-zero exit is expected; results still written */
+    if (e.signal) console.log(`  TIMEOUT: vitest killed after 10min (hung student code?)`);
   }
   const out = `${dir}/.vit.json`;
   if (!existsSync(out)) return { passed: 0, total: 0 };
@@ -147,9 +151,11 @@ function gradeDart(dir, id) {
   try {
     out = execSync("dart test --reporter json", {
       cwd: dir, encoding: "utf8", maxBuffer: 1e8, stdio: ["ignore", "pipe", "pipe"],
+      timeout: 600_000,
     });
   } catch (e) {
     out = (e.stdout || "").toString(); // tests failing -> non-zero exit; stdout still has the json events
+    if (e.signal) console.log(`  TIMEOUT: dart test killed after 10min (hung student code?)`);
   }
   let passed = 0, total = 0;
   const names = new Map(); // testID -> name (from testStart events)
