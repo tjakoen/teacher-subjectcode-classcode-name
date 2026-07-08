@@ -4,9 +4,9 @@
 // For each assignment in grader/assignments.json, finds the matching student
 // repos for a section, clones each, grades it against the CANONICAL tests/keys
 // kept here in the teacher repo (so a student editing their own tests changes
-// nothing), records the score in gradebook/, and pushes a receipt into the
-// student repo. Idempotent: a repo whose latest commit is already graded is
-// skipped unless --force.
+// nothing), records the score in gradebook/ (delivery to student repos
+// is publish-grades.mjs only). Idempotent: a repo whose latest commit is
+// already graded is skipped unless --force.
 //
 // Usage: node tools/grade-sweep.mjs <section> [--force] [--only=<assignmentId>]
 //

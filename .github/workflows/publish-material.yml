@@ -33,7 +33,7 @@ jobs:
       - name: Resolve target repos for the section
         id: targets
         run: |
-          repos=$(gh repo list "$ORG" --limit 1000 --json name -q '.[].name' \
+          repos=$(gh repo list "$ORG" --limit 5000 --json name -q '.[].name' \
             | node teacher/tools/list-section-repos.mjs "$SECTION" student-)
           echo "Targets for section $SECTION:"; echo "$repos"
           {

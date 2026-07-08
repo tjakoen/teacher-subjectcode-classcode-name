@@ -18,6 +18,13 @@
 // it only creates missing repos and fills identity, sourced from the student's
 // own submission student.json (falling back to the gradebook identity).
 //
+// On CREATE it also adds the student as an admin collaborator on their OWN
+// workspace: a fresh repo has no collaborators, so without this the student can
+// never see the workspace or the grades we later deliver there. The login is
+// taken from student.json githubAccount (falling back to the repo-name handle,
+// which is often a display name) and verified to exist before the invite; an
+// unresolvable/nonexistent login is warned and skipped, never fatal.
+//
 // DRY RUN BY DEFAULT: prints the plan and touches nothing until --execute.
 //
 // Usage: node tools/provision-workspaces.mjs <section> [--execute] [--only=<handle>]
@@ -146,6 +153,11 @@ const studentJsonFor = (g) => {
   };
 };
 
+// The github login to add as an admin collaborator on the student's workspace.
+// Prefer the student.json githubAccount (a real login) over the repo-name handle
+// (often a display name, not a github account); null if we have neither.
+const collaboratorLogin = (sj, handle) => String(sj?.githubAccount || "").trim() || handle || null;
+
 // ---- build the plan ------------------------------------------------------
 const plan = { create: [], scaffold: [], fill: [], collide: [], needIdentity: [], ok: [] };
 for (const g of groups) {
@@ -178,7 +190,10 @@ if (plan.collide.length) {
 }
 if (plan.create.length) {
   console.log(`CREATE (${plan.create.length}):`);
-  for (const c of plan.create) console.log(`  ${tag}create ${c.name}${c.hasIdentity ? "" : "  (WARN: no identity in activities - student.json will be blank)"}`);
+  for (const c of plan.create) {
+    const login = collaboratorLogin(c.sj, c.handle);
+    console.log(`  ${tag}create ${c.name}${c.hasIdentity ? "" : "  (WARN: no identity in activities - student.json will be blank)"}${login ? `  [+admin collaborator: ${login}]` : "  (WARN: no github login - student cannot be added as collaborator)"}`);
+  }
   console.log("");
 }
 if (plan.scaffold.length) { console.log(`SCAFFOLD empty (${plan.scaffold.length}):`); for (const s of plan.scaffold) console.log(`  ${tag}scaffold ${s.ws}`); console.log(""); }
@@ -226,6 +241,19 @@ const pushWorkspace = (repo, sj) => {
   sh(`git -C ${dir} push -q origin HEAD:main`);
 };
 
+// Add the student to their OWN newly-created workspace as an admin collaborator.
+// A fresh repo has no collaborators, so without this the workspace (and the
+// grades we deliver there) is invisible to the student. Verify the login exists
+// before inviting so a typo'd handle never becomes a bogus invite; a failure
+// here only warns - one unresolved student must never abort the whole run.
+const addCollaborator = (repo, sj, handle) => {
+  const login = collaboratorLogin(sj, handle);
+  if (!login) { console.log(`  WARN: ${repo} - no github login; student NOT added as collaborator (delivered grades will be invisible)`); return; }
+  if (!trySh(`gh api users/${login} -q .login`)) { console.log(`  WARN: ${repo} - github account "${login}" not found; student NOT added as collaborator`); return; }
+  trySh(`gh api -X PUT repos/${OWNER}/${repo}/collaborators/${login} -f permission=admin`);
+  console.log(`  + ${login} added as admin collaborator on ${repo}`);
+};
+
 if (!execute) { console.log(`\nDRY RUN - nothing changed. Re-run with --execute to apply.`); process.exit(0); }
 
 sh(`gh auth setup-git`);
@@ -233,7 +261,8 @@ let done = 0;
 for (const c of plan.create) {
   console.log(`create ${c.name} ...`);
   trySh(`gh repo create ${OWNER}/${c.name} --private -d "Course workspace"`);
-  pushWorkspace(c.name, c.sj); done++;
+  pushWorkspace(c.name, c.sj);
+  addCollaborator(c.name, c.sj, c.handle); done++;
 }
 for (const s of plan.scaffold) { console.log(`scaffold ${s.ws} (empty) ...`); pushWorkspace(s.ws, s.sj); done++; }
 for (const f of plan.fill) { console.log(`fill ${f.ws} ...`); putStudentJson(f.ws, f.sj); done++; }

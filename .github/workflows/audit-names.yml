@@ -36,7 +36,7 @@ jobs:
 
       - name: Audit repo names
         run: |
-          gh repo list "$ORG" --limit 1000 --json name -q '.[].name' \
+          gh repo list "$ORG" --limit 5000 --json name -q '.[].name' \
             | node tools/audit-repo-names.mjs \
                 "${{ steps.expect.outputs.subject }}" \
                 "${{ steps.expect.outputs.classcode }}"
@@ -46,7 +46,7 @@ jobs:
         run: |
           SUBJECT="${{ steps.expect.outputs.subject }}"
           CLASSCODE="${{ steps.expect.outputs.classcode }}"
-          gh repo list "$ORG" --limit 1000 --json name -q '.[].name' \
+          gh repo list "$ORG" --limit 5000 --json name -q '.[].name' \
             | node tools/list-section-repos.mjs "$CLASSCODE" student- \
             | while read -r repo; do
               [ -z "$repo" ] && continue
