@@ -95,7 +95,7 @@ export function warrantsFeedback(row, a) {
 // the code that matters, not stray config.
 function collectSourceFiles(clone, cap = 24000) {
   const skipDir = new Set(["node_modules", ".git", "dist", "build", "coverage", ".vite", "test", "tests", "__tests__"]);
-  const keep = /\.(jsx?|tsx?|dart|css|scss|sass|html|py|md)$/i;     // code/markup + docs (README, INDEX.md, ...)
+  const keep = /\.(jsx?|tsx?|dart|css|scss|sass|html|py|md)$/i;     // code/markup + docs (README, HAUDEX.md, ...)
   const allowName = new Set(["package.json", "pubspec.yaml", "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.ts"]);
   const skipName = /^(vite|vitest|eslint|prettier|babel|rollup)\b|\.config\.[cm]?[jt]s$/i; // build/lint boilerplate
   const cands = [];
@@ -263,10 +263,19 @@ export async function aiNotes(row, a, { work = ".grade-work", previewDir } = {})
 
   let text;
   try {
-    const res = await callModel({
+    const ask = (msgContent) => callModel({
       model: MODELS_NAME, temperature: 0.4, max_tokens: 800,
-      messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content }],
+      messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: msgContent }],
     });
+    let res = await ask(content);
+    // Screenshots dominate the request body, so a large app plus its shots can
+    // exceed the API's request-size limit (HTTP 413). Retry once code-only so
+    // feedback is still produced - the design just cannot be judged from the
+    // screenshot in that case.
+    if (res.status === 413 && shots.length) {
+      console.log(`  notes: ${row.repo} (${a.id}) oversized with screenshot(s); retrying code-only`);
+      res = await ask(content.filter((c) => c.type === "text"));
+    }
     if (!res.ok) { console.log(`  notes: ${row.repo} (${a.id}) skipped (HTTP ${res.status})`); return blank; }
     const j = await res.json();
     text = (j.choices?.[0]?.message?.content || "").trim();
