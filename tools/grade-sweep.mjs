@@ -106,7 +106,7 @@ if (existsSync(CSV)) {
 const listRepos = (prefix) =>
   JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`))
     .map((r) => r.name)
-    .filter((n) => n.startsWith(prefix) && n.includes(`-${section}-`))
+    .filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase()) && n.toLowerCase().includes(`-${String(section).toLowerCase()}-`))
     .filter((n) => !onlyRepo || n === onlyRepo);
 
 function gradeVitest(dir, id) {
