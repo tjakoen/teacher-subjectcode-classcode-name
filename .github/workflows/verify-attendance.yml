@@ -1,0 +1,51 @@
+name: Verify attendance
+
+# Fires whenever the scanner commits a batch CSV. Recomputes the HMAC on each row
+# (ATTENDANCE_HMAC_SECRET), flags any forged scan, writes a per-batch summary .md
+# next to each CSV, and rebuilds attendance/ATTENDANCE.md. The job reds if any
+# scan fails verification (a hand-made / edited QR) - read the annotation.
+#
+# Only the raw batch CSVs trigger it (attendance/sessions/**/*.csv); the .md it
+# writes back are committed [skip ci] and live outside that path, so it never
+# loops. Purely teacher-side: no student repo is touched.
+on:
+  push:
+    paths:
+      - "attendance/sessions/**/*.csv"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-attendance
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      SECTION: "CLASSCODE"                                  # LOCKED to one class
+      ATTENDANCE_HMAC_SECRET: ${{ secrets.ATTENDANCE_HMAC_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify + summarize
+        id: verify
+        run: node tools/verify-attendance.mjs
+        continue-on-error: true
+      - name: Commit summaries
+        run: |
+          git config user.name "course-bot"
+          git config user.email "course-bot@users.noreply.github.com"
+          git add attendance/
+          git diff --cached --quiet || git commit -m ":bar_chart: Update attendance summary [skip ci]"
+          git pull --rebase --autostash || true
+          git push
+      - name: Fail if any scan was flagged
+        if: ${{ steps.verify.outcome == 'failure' }}
+        run: |
+          echo "::error::One or more attendance scans failed signature verification - see the batch summary."
+          exit 1

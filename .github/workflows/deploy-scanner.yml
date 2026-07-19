@@ -1,0 +1,44 @@
+name: Deploy attendance scanner
+
+# Publishes ONLY attendance/scanner.html to GitHub Pages (as index.html). The
+# rest of the repo - the gradebook and its student PII - is never in the Pages
+# artifact, so the published site exposes nothing sensitive even though this repo
+# is private. The scanner itself holds no secret; it talks to the repo only via
+# the fine-grained PAT the teacher pastes at runtime.
+#
+# One-time setup: repo Settings -> Pages -> Source = "GitHub Actions".
+# Site URL after the first run: https://<owner>.github.io/<repo>/
+on:
+  push:
+    paths:
+      - "attendance/scanner.html"
+      - ".github/workflows/deploy-scanner.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage only the scanner (nothing else is published)
+        run: |
+          mkdir -p _site
+          cp attendance/scanner.html _site/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

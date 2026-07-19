@@ -1,0 +1,66 @@
+name: Generate attendance QRs
+
+# Signs a per-student Attendance QR and commits it to each student workspace that
+# lacks one (attendance/attendance-qr.png + a short README), and refreshes the
+# teacher-side attendance/roster.json the scanner uses to show names.
+#
+# The QR encodes <studentNumber>.<sig>; the signature is HMAC'd with the
+# ATTENDANCE_HMAC_SECRET repo secret. Verification happens later in
+# "Verify attendance", never in the scanner - so the scanner page holds no secret.
+#
+# DRY RUN BY DEFAULT (execute=false): prints the plan, changes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "Actually write QRs to student workspaces (true), or dry-run (false)"
+        required: false
+        default: "false"
+      force:
+        description: "Regenerate QRs even for workspaces that already have one"
+        required: false
+        default: "false"
+      only:
+        description: "Only this student handle (optional)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: generate-attendance-qrs
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.ORG_PAT }}                 # cross-repo: write into student workspaces
+      GRADE_OWNER: ${{ github.repository_owner }}
+      SECTION: "CLASSCODE"                                  # LOCKED to one class
+      WORKSPACE_PREFIX: "student-SUBJECTCODE-CLASSCODE-"           # workspace namespace for this section
+      ATTENDANCE_HMAC_SECRET: ${{ secrets.ATTENDANCE_HMAC_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install QR renderer (ephemeral, not tracked)
+        run: npm i qrcode@1
+      - name: Authenticate git for cross-repo pushes
+        run: gh auth setup-git
+      - name: Generate
+        run: |
+          ARGS="$SECTION"
+          [ "${{ github.event.inputs.execute }}" = "true" ] && ARGS="$ARGS --execute"
+          [ "${{ github.event.inputs.force }}" = "true" ] && ARGS="$ARGS --force"
+          [ -n "${{ github.event.inputs.only }}" ] && ARGS="$ARGS --only=${{ github.event.inputs.only }}"
+          node tools/generate-attendance-qrs.mjs $ARGS
+      - name: Commit refreshed roster.json
+        if: ${{ github.event.inputs.execute == 'true' }}
+        run: |
+          git config user.name "course-bot"
+          git config user.email "course-bot@users.noreply.github.com"
+          git add attendance/roster.json
+          git diff --cached --quiet || git commit -m ":busts_in_silhouette: Refresh attendance roster [skip ci]"
+          git push

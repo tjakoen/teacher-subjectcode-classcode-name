@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Attendance scanner</title>
+<!--
+  Attendance QR scanner (GitHub Pages app). Holds NO secret: you paste a
+  fine-grained PAT (Contents: read+write on this ONE teacher repo) at runtime and
+  it is kept only in this browser's localStorage. It reads attendance/roster.json
+  to show names, and writes one CSV per scanning period ("batch") to
+  attendance/sessions/<date>/<HHMM>-<label>.csv. Committing is safe to do anytime
+  and as often as you like - it merges by student number. Signatures are verified
+  server-side by verify-attendance (the secret never lives here).
+-->
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --card:#f6f6f6; --ok:#137333; --bad:#b00020; --accent:#0b57d0; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151515; --fg:#eee; --muted:#999; --line:#333; --card:#1f1f1f; --ok:#5cd07a; --bad:#ff6b6b; --accent:#7aa7ff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:.75rem 1rem; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+  header b { font-size:1.05rem; } header .sec { color:var(--muted); font-size:.85rem; }
+  main { max-width:640px; margin:0 auto; padding:1rem; }
+  section { border:1px solid var(--line); border-radius:10px; padding:1rem; margin-bottom:1rem; background:var(--card); }
+  label { display:block; font-size:.8rem; color:var(--muted); margin:.5rem 0 .15rem; }
+  input { width:100%; padding:.55rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font-size:1rem; }
+  .row { display:flex; gap:.5rem; } .row > * { flex:1; }
+  button { padding:.6rem .9rem; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:1rem; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #reader { width:100%; border-radius:10px; overflow:hidden; }
+  .status { padding:.6rem .8rem; border-radius:8px; font-weight:600; margin-top:.5rem; }
+  .status.ok { background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok); }
+  .status.dup { background:color-mix(in srgb, var(--muted) 20%, transparent); color:var(--muted); }
+  .status.bad { background:color-mix(in srgb, var(--bad) 18%, transparent); color:var(--bad); }
+  ul.list { list-style:none; padding:0; margin:.5rem 0 0; }
+  ul.list li { display:flex; justify-content:space-between; gap:.5rem; padding:.4rem 0; border-bottom:1px solid var(--line); font-size:.95rem; }
+  ul.list li small { color:var(--muted); }
+  ul.list li button { background:transparent; color:var(--bad); border:0; font-size:.85rem; padding:.1rem .4rem; }
+  .count { font-weight:700; } .muted { color:var(--muted); font-size:.85rem; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <b>Attendance</b>
+  <span class="sec" id="hdrSec"></span>
+  <span style="flex:1"></span>
+  <button class="ghost" id="toggleCfg" type="button">Settings</button>
+</header>
+<main>
+
+  <section id="cfg">
+    <div class="muted">One-time setup. Stored only in this browser.</div>
+    <div class="row"><div><label>Org / owner</label><input id="owner" placeholder="HAU-6APSI"></div>
+      <div><label>Teacher repo</label><input id="repo" placeholder="teacher-6apsi-2240-tjakoen"></div></div>
+    <label>Section</label><input id="section" placeholder="2240">
+    <label>Personal access token (Contents: read + write, this repo only)</label>
+    <input id="pat" type="password" placeholder="github_pat_...">
+    <div class="row" style="margin-top:.75rem">
+      <button id="saveCfg" type="button">Save + load roster</button>
+    </div>
+    <div id="cfgMsg" class="muted" style="margin-top:.5rem"></div>
+  </section>
+
+  <section id="batchBox" class="hide">
+    <label>Batch label (e.g. on-time, late, class-A)</label>
+    <div class="row"><input id="label" value="on-time">
+      <button id="newBatch" type="button" style="flex:0 0 auto">New batch</button></div>
+    <div class="muted" id="batchInfo" style="margin-top:.5rem"></div>
+  </section>
+
+  <section id="scanBox" class="hide">
+    <div id="reader"></div>
+    <div id="status" class="status hide"></div>
+  </section>
+
+  <section id="listBox" class="hide">
+    <div>Scanned this batch: <span class="count" id="count">0</span></div>
+    <ul class="list" id="list"></ul>
+    <div class="row" style="margin-top:.75rem">
+      <button id="commit" type="button">Commit batch</button>
+    </div>
+    <div id="commitMsg" class="muted" style="margin-top:.5rem"></div>
+  </section>
+
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const b64 = (str) => btoa(String.fromCharCode(...new TextEncoder().encode(str)));
+const unb64 = (b) => new TextDecoder().decode(Uint8Array.from(atob(b), (c) => c.charCodeAt(0)));
+const sanitize = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "batch";
+const pad = (n) => String(n).padStart(2, "0");
+const localStamp = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+// Settings persist per repo. localStorage is per-origin, but two sections in one
+// org share an origin (e.g. hau-6adet.github.io/teacher-...-2134 and ...-2125),
+// so owner/repo/section are keyed by the repo path. The PAT is kept per-origin,
+// so one org token entered once covers every section on that host.
+const SCOPE = (location.pathname || "/").split("/").filter(Boolean)[0] || "_";
+const key = (k) => (k === "pat" ? "att_pat" : `att_${SCOPE}_${k}`);
+const CFG_KEYS = ["owner", "repo", "section", "pat"];
+const cfg = {};
+CFG_KEYS.forEach((k) => { cfg[k] = localStorage.getItem(key(k)) || ""; if ($(k)) $(k).value = cfg[k]; });
+
+// Pre-fill owner/repo/section from the Pages URL (a project site is served at
+// https://<owner>.github.io/<repo>/, and the teacher repo name carries the
+// section, e.g. teacher-6apsi-2240-tjakoen). Anything already saved wins; all
+// three stay editable in Settings. So on the repo's own Pages you only paste PAT.
+(() => {
+  const host = (location.hostname || "").match(/^([^.]+)\.github\.io$/i);
+  if (host && !cfg.owner) { cfg.owner = host[1]; $("owner").value = host[1]; }
+  const seg = (location.pathname || "").split("/").filter(Boolean)[0];
+  if (seg && !cfg.repo) { cfg.repo = seg; $("repo").value = seg; }
+  const sec = (cfg.repo || "").match(/-(\d{3,4})-/);
+  if (sec && !cfg.section) { cfg.section = sec[1]; $("section").value = sec[1]; }
+})();
+
+let roster = {};           // number -> name
+let batch = null;          // { date, hhmm, label, rows: Map(num -> {num,name,ts,sig}) }
+let scanner = null;
+
+function gh(path, opts = {}) {
+  return fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+    ...opts,
+    headers: { Authorization: `Bearer ${cfg.pat}`, Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28", ...(opts.headers || {}) },
+  });
+}
+
+async function loadRoster() {
+  const r = await gh("attendance/roster.json");
+  if (r.ok) { const j = await r.json(); roster = JSON.parse(unb64(j.content)); return Object.keys(roster).length; }
+  if (r.status === 404) { roster = {}; return 0; }        // no roster yet - names just won't show
+  throw new Error(`roster load failed (HTTP ${r.status})`);
+}
+
+$("saveCfg").onclick = async () => {
+  CFG_KEYS.forEach((k) => { cfg[k] = $(k).value.trim(); localStorage.setItem(key(k), cfg[k]); });
+  if (!cfg.owner || !cfg.repo || !cfg.section || !cfg.pat) { $("cfgMsg").textContent = "Fill in all four fields."; return; }
+  $("cfgMsg").textContent = "Loading roster...";
+  try {
+    const n = await loadRoster();
+    $("cfgMsg").textContent = n ? `Roster loaded (${n} students).` : "No roster.json yet - scanning still works, names blank.";
+    $("hdrSec").textContent = `${cfg.owner} / ${cfg.section}`;
+    $("cfg").classList.add("hide");
+    ["batchBox", "scanBox", "listBox"].forEach((id) => $(id).classList.remove("hide"));
+    startBatch();
+    startScanner();
+  } catch (e) { $("cfgMsg").textContent = "Error: " + e.message; }
+};
+$("toggleCfg").onclick = () => $("cfg").classList.toggle("hide");
+
+function startBatch() {
+  const d = new Date();
+  batch = { date: `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
+    hhmm: `${pad(d.getHours())}${pad(d.getMinutes())}`, label: sanitize($("label").value), rows: new Map() };
+  renderList();
+  $("batchInfo").textContent = `Batch: ${batch.date} ${batch.hhmm} / ${batch.label}  ->  attendance/sessions/${batch.date}/${batch.hhmm}-${batch.label}.csv`;
+}
+$("newBatch").onclick = startBatch;
+
+function showStatus(cls, text) {
+  const s = $("status"); s.className = `status ${cls}`; s.textContent = text; s.classList.remove("hide");
+  if (navigator.vibrate) navigator.vibrate(cls === "ok" ? 60 : 30);
+}
+
+function onScan(text) {
+  const [num, sig] = String(text).split(".");
+  if (!num) { showStatus("bad", "Unreadable QR"); return; }
+  if (batch.rows.has(num)) { showStatus("dup", `Already scanned: ${roster[num] || num}`); return; }
+  const name = roster[num] || "";
+  batch.rows.set(num, { num, name, sig: sig || "", ts: localStamp(new Date()) });
+  showStatus("ok", `${name || "#" + num} recorded`);
+  renderList();
+}
+
+function renderList() {
+  $("count").textContent = batch.rows.size;
+  const ul = $("list"); ul.innerHTML = "";
+  [...batch.rows.values()].forEach((r) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span>${r.name || "#" + r.num} <small>${r.num}</small></span><span><small>${r.ts.slice(11)}</small> <button>x</button></span>`;
+    li.querySelector("button").onclick = () => { batch.rows.delete(r.num); renderList(); };
+    ul.appendChild(li);
+  });
+}
+
+function startScanner() {
+  if (scanner) return;
+  scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: { width: 250, height: 250 }, rememberLastUsedCamera: true }, false);
+  scanner.render(onScan, () => {});
+}
+
+$("commit").onclick = async () => {
+  if (!batch.rows.size) { $("commitMsg").textContent = "Nothing to commit yet."; return; }
+  const path = `attendance/sessions/${batch.date}/${batch.hhmm}-${batch.label}.csv`;
+  $("commit").disabled = true; $("commitMsg").textContent = "Committing...";
+  try {
+    // Merge with whatever is already in this batch's file (safe re-commit): union
+    // by student number, keeping the earliest timestamp already recorded.
+    const merged = new Map();
+    const existing = await gh(path);
+    let sha;
+    if (existing.ok) {
+      const j = await existing.json(); sha = j.sha;
+      unb64(j.content).split(/\r?\n/).forEach((line) => {
+        const [ts, num, sig] = line.split(",").map((c) => (c || "").trim());
+        if (num && num.toLowerCase() !== "studentnumber") merged.set(num, { ts, num, sig });
+      });
+    }
+    batch.rows.forEach((r) => { if (!merged.has(r.num)) merged.set(r.num, { ts: r.ts, num: r.num, sig: r.sig }); });
+    const rows = [...merged.values()].sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+    const csv = "timestamp,studentNumber,signature\n" + rows.map((r) => `${r.ts},${r.num},${r.sig}`).join("\n") + "\n";
+    const body = { message: `:memo: Attendance ${batch.date} ${batch.hhmm}-${batch.label} (${rows.length})`, content: b64(csv) };
+    if (sha) body.sha = sha;
+    const put = await gh(path, { method: "PUT", body: JSON.stringify(body) });
+    if (!put.ok) throw new Error(`HTTP ${put.status} ${(await put.json()).message || ""}`);
+    $("commitMsg").textContent = `Committed ${rows.length} to ${path}`;
+  } catch (e) { $("commitMsg").textContent = "Error: " + e.message; }
+  finally { $("commit").disabled = false; }
+};
+
+if (cfg.owner) $("hdrSec").textContent = `${cfg.owner} / ${cfg.section}`;
+</script>
+</body>
+</html>
