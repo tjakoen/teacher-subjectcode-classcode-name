@@ -1,0 +1,59 @@
+name: Publish attendance
+
+# Delivers each student's own attendance receipt (attendance/MY-ATTENDANCE.md)
+# into their workspace. The ONLY thing that writes attendance to student repos.
+#
+# Auto-runs after "Verify attendance" completes, so a fresh scan reaches students
+# without a manual step. The receipt is idempotent (its body is derived from the
+# recorded data, not the wall clock), so an unchanged record is skipped and no
+# commit is made - safe to fire on every verify. Manual dispatch offers a dry-run
+# to preview before writing.
+#
+# Reads the teacher-side attendance/summary.json that verify-attendance commits;
+# shows each student ONLY their own dates. Cross-repo writes use ORG_PAT.
+on:
+  workflow_run:
+    workflows: ["Verify attendance"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "Actually write receipts to student workspaces (true), or dry-run (false)"
+        required: false
+        default: "false"
+      only:
+        description: "Only this student handle (optional)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-attendance
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.ORG_PAT }}                 # cross-repo: write into student workspaces
+      GRADE_OWNER: ${{ github.repository_owner }}
+      SECTION: "CLASSCODE"                                  # LOCKED to one class
+      WORKSPACE_PREFIX: "student-SUBJECTCODE-CLASSCODE-"           # workspace namespace for this section
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Authenticate git for cross-repo pushes
+        run: gh auth setup-git
+      - name: Publish receipts
+        run: |
+          ARGS="$SECTION"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            ARGS="$ARGS --execute"
+          else
+            [ "${{ github.event.inputs.execute }}" = "true" ] && ARGS="$ARGS --execute"
+            [ -n "${{ github.event.inputs.only }}" ] && ARGS="$ARGS --only=${{ github.event.inputs.only }}"
+          fi
+          node tools/publish-attendance.mjs $ARGS
