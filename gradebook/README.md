@@ -36,9 +36,11 @@ How it behaves:
   or student not in the file is left untouched.
 - **Scoring:** `passed/total` scaled to each assignment's Points Possible.
 - **Subjective / AI-graded activities:** mark them in `grader/assignments.json`:
-  - `"manual": true` - never exported/pushed (you enter it by hand). AI-graded
-    rubric projects use this: review the AI's proposed total grade, then
-    publish it. "Review then publish."
+  - `"manual": true` - never exported/pushed (you enter it by hand).
+  - AI-graded rubric projects are **not** `manual`: they are held out of the push
+    until you review them, then pushed automatically once you flip
+    `"publish": true` (their reviewed final score is the grade). "Review then
+    publish." See the AI feedback flags below and the Canvas push section.
   - `"totalPoints": <n>` - what the activity is worth in Canvas. Used only to be
     reconciled against Canvas's live Points Possible; a mismatch is written to
     `gradebook/points-mismatch.md`. The objective/design split lives in
@@ -55,7 +57,10 @@ for you to review.
 
 - `"publish": true` - deliver this activity's grades + feedback to student repos
   on the next `publish.yml` run (default false). Grading is teacher-side only;
-  nothing reaches a student until this is set. Applies to all activities.
+  nothing reaches a student until this is set. Applies to all activities. For an
+  **AI-graded** activity it also unblocks the Canvas push: the reviewed final
+  score (the `aiScore` column) is sent with a rubric-breakdown comment (see the
+  Canvas push section). Only flip it once the activity is fully reviewed.
 - `"ai-grading": true` - opt this activity in (off by default).
 - `"feedback": "project"` - design project: subjective rubric half is visual
   design (frontend, screenshot-led). `"feedback": "code"` - code-quality
@@ -99,6 +104,16 @@ objective part - same rules as the export. `locked` is not consulted: a frozen
 score is a real score and is sent. Re-running is idempotent (Canvas updates the
 existing submission), so this is safe to run automatically after each grade sweep
 once you've trusted a dry run.
+
+**AI-graded activities** are held out of the push until you review them and set
+`"publish": true`. Once published, the reviewed final score (the `aiScore`
+column in `grades.csv`, filled when you approve the grade) is what is sent -
+always with a submission comment carrying the rubric breakdown plus the
+student-facing feedback prose. That comment deliberately excludes the
+instructor-only header, the proposed-total restatement, and the AI-authored
+likelihood line, and never mentions AI - the same wall the published
+`FEEDBACK.md` keeps. A published AI activity whose `aiScore` is still blank
+(unreviewed or flagged) is skipped, so nothing ungraded leaks out.
 
 Needs two secrets: `CANVAS_BASE_URL` and a `CANVAS_TOKEN` with grade-write
 rights. Reading `SIS User ID` needs the token's SIS-data permission; without it

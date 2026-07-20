@@ -25,7 +25,7 @@
 //   * locked: true        -> a first grade is sent, but an existing Canvas grade
 //                            is NEVER overwritten (unlocked grades always are).
 
-import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   tokenToId, loadPolicy, loadGradebook, consolidate, matchGroups, pointsFor,
@@ -72,6 +72,51 @@ const buildComment = (t, score, pts) => {
   }
   if (url) lines.push(`- Reference: ${url}`);
   return lines.join("\n");
+};
+
+// The reviewed AI grade IS the whole grade (objective + design), so its Canvas
+// comment carries a rubric breakdown of how it was reached plus the student
+// feedback prose. It deliberately EXCLUDES the instructor-only header, the
+// proposed-total restatement, and the AI-authored likelihood line, and never
+// mentions AI - the same wall the published FEEDBACK.md keeps.
+const readNote = (ourId, repo) => {
+  try { return readFileSync(`gradebook/notes/${ourId}/${repo}.md`, "utf8"); } catch { return ""; }
+};
+const parseAiNote = (note) => {
+  if (!note) return { student: "", breakdown: "" };
+  const cut = note.indexOf("\n---");
+  const head = cut >= 0 ? note.slice(0, cut) : note;
+  const instr = cut >= 0 ? note.slice(cut).replace(/^\s*\n?-{3,}\s*/, "") : "";
+  const sl = head.split("\n");
+  while (sl.length && (/^#/.test(sl[0].trim()) || /^_.*_$/.test(sl[0].trim()) || sl[0].trim() === "")) sl.shift();
+  const student = sl.join("\n").trim();
+  const breakdown = instr.split("\n")
+    .filter((ln) => {
+      const t = ln.trim();
+      if (/^\*+\s*for the instructor/i.test(t)) return false;
+      if (/ai-authored likelihood/i.test(t)) return false;
+      if (/^proposed total/i.test(t)) return false;
+      return true;
+    })
+    .join("\n").replace(/^\s+|\s+$/g, "");
+  return { student, breakdown };
+};
+const buildAiComment = (t, score, pts) => {
+  const { student, breakdown } = parseAiNote(readNote(t.ourId, score.repo));
+  const sha7 = (score.sha || "").slice(0, 7);
+  const url = OWNER && score.repo && score.sha ? `https://github.com/${OWNER}/${score.repo}/commit/${score.sha}` : "";
+  const lines = [`Grade: ${pts}/${t.pointsPossible ?? "?"}`];
+  if (breakdown) lines.push("", "How this grade was reached:", breakdown);
+  if (student) lines.push("", "Feedback:", student);
+  lines.push("", `- Submission: ${score.repo}${sha7 ? `@${sha7}` : ""}${score.late ? "  (submitted late)" : ""}`);
+  if (url) lines.push(`- Reference: ${url}`);
+  return lines.join("\n");
+};
+// The reviewed final score lives in the gradebook's aiScore column.
+const aiPointsFor = (score) => {
+  if (!score || score.aiScore == null || score.aiScore === "") return null;
+  const n = Number(score.aiScore);
+  return Number.isFinite(n) ? Math.round(n) : null;
 };
 
 // ---- Canvas REST client --------------------------------------------------
@@ -152,10 +197,17 @@ for (const a of assignments) {
     pointsMismatch.push({ ourId, name: a.name, declared: pol.totalPoints, canvas: a.points_possible });
   }
   if (pol.manual) { skippedManual.push({ ourId, name: a.name }); continue; }
-  // AI-graded rubric activities are NOT pushed with the raw test score - their
-  // grade is the objective score plus a reviewed design score. Until that
-  // review-then-publish path is wired, hold them out of the auto-push.
-  if (pol.aiGraded) { heldForReview.push({ ourId, name: a.name }); continue; }
+  // AI-graded rubric activities are held out of the auto-push until reviewed.
+  // Once reviewed + published ("publish": true), their reviewed final score
+  // (grades.csv aiScore) IS the grade, delivered with a rubric-breakdown comment.
+  if (pol.aiGraded) {
+    if (pol.publish) {
+      targets.push({ ourId, canvasId: a.id, name: a.name, pointsPossible: a.points_possible ?? pol.totalPoints ?? null, autoPoints: null, locked: !!pol.locked, ai: true });
+    } else {
+      heldForReview.push({ ourId, name: a.name });
+    }
+    continue;
+  }
   targets.push({ ourId, canvasId: a.id, name: a.name, pointsPossible: a.points_possible ?? null, autoPoints: pol.autoPoints ?? null, locked: !!pol.locked });
 }
 
@@ -189,17 +241,18 @@ if (pointsMismatch.length) {
 // assignment is fetched at most once.
 const alreadyGraded = new Map();      // canvasId -> Set(userId)             [locked]
 const existingComments = new Map();   // canvasId -> Map(userId -> Set(text)) [comments]
-for (const t of targets.filter((x) => x.locked || withComment)) {
+for (const t of targets.filter((x) => x.locked || withComment || x.ai)) {
+  const wantComments = withComment || t.ai;   // AI-reviewed always carries a comment
   let subs = [];
   try {
-    subs = await apiGetAll(`/courses/${courseId}/assignments/${t.canvasId}/submissions${withComment ? "?include[]=submission_comments" : ""}`);
+    subs = await apiGetAll(`/courses/${courseId}/assignments/${t.canvasId}/submissions${wantComments ? "?include[]=submission_comments" : ""}`);
   } catch { subs = []; }   // a fetch hiccup must not block grades; treat as "none known"
   if (t.locked) {
     alreadyGraded.set(t.canvasId, new Set(
       subs.filter((s) => s.score != null || (s.grade != null && s.grade !== "")).map((s) => s.user_id),
     ));
   }
-  if (withComment) {
+  if (wantComments) {
     const byUser = new Map();
     for (const s of subs) byUser.set(s.user_id, new Set((s.submission_comments || []).map((c) => c.comment)));
     existingComments.set(t.canvasId, byUser);
@@ -214,31 +267,31 @@ const planRows = [];          // for the report
 for (const { student, group } of pairs) {
   for (const t of targets) {
     const score = group.scores.get(t.ourId);
-    const pts = pointsFor(score, t);
-    if (pts == null) continue;
+    const pts = t.ai ? aiPointsFor(score) : pointsFor(score, t);
+    if (pts == null) continue;   // AI: not yet reviewed (blank aiScore) -> skip
     // Locked + already graded in Canvas -> leave it; never overwrite.
     if (t.locked && alreadyGraded.get(t.canvasId)?.has(student.id)) { skippedLocked++; continue; }
     if (!plan.has(t.canvasId)) plan.set(t.canvasId, {});
     const entry = { posted_grade: pts };
-    if (withComment) {
-      const text = buildComment(t, score, pts);
+    if (t.ai || withComment) {
+      const text = t.ai ? buildAiComment(t, score, pts) : buildComment(t, score, pts);
       const seen = existingComments.get(t.canvasId)?.get(student.id);
       if (seen && seen.has(text)) skippedComment++;   // identical comment already there -> don't stack
       else entry.text_comment = text;
     }
     plan.get(t.canvasId)[student.id] = entry;
-    planRows.push({ name: student.name, ourId: t.ourId, pts, possible: t.pointsPossible, sub: t.autoPoints != null });
+    planRows.push({ name: student.name, ourId: t.ourId, pts, possible: t.pointsPossible, sub: t.autoPoints != null, ai: !!t.ai });
   }
 }
 const totalCells = planRows.length;
 
 md.push("## Grade plan", "", `Cells to write: **${totalCells}** across **${plan.size}** assignment(s).`, "");
 if (skippedLocked) md.push("", `_Left untouched: **${skippedLocked}** locked grade(s) already present in Canvas (not overwritten)._`, "");
-if (withComment && skippedComment) md.push("", `_Comments: **${skippedComment}** identical comment(s) already on Canvas, not re-posted (no stacking)._`, "");
+if (skippedComment) md.push("", `_Comments: **${skippedComment}** identical comment(s) already on Canvas, not re-posted (no stacking)._`, "");
 md.push("| Student | Assignment | Points | Out of | Note |", "| --- | --- | --- | --- | --- |");
 md.push(...planRows
   .sort((a, b) => a.name.localeCompare(b.name) || a.ourId.localeCompare(b.ourId))
-  .map((p) => `| ${p.name} | ${p.ourId} | ${p.pts} | ${p.possible ?? "?"} | ${p.sub ? "objective only - add subjective by hand" : ""} |`));
+  .map((p) => `| ${p.name} | ${p.ourId} | ${p.pts} | ${p.possible ?? "?"} | ${p.ai ? "AI-reviewed - full grade + rubric breakdown comment" : p.sub ? "objective only - add subjective by hand" : ""} |`));
 md.push("");
 const subjectiveTargets = targets.filter((t) => t.autoPoints != null && plan.has(t.canvasId));
 if (subjectiveTargets.length) {
@@ -261,7 +314,7 @@ if (!execute) {
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, md.join("\n") + "\n");
   console.log(`  DRY RUN: would write ${totalCells} grade(s) across ${plan.size} assignment(s); ${unmatched.length} unmatched`);
-  if (withComment) console.log(`  comments: ${skippedComment} already present (skipped), rest would post`);
+  if (withComment || skippedComment) console.log(`  comments: ${skippedComment} already present (skipped), rest would post`);
   console.log(`  report: ${reportPath}  (re-run with --execute to push)`);
   process.exit(0);
 }

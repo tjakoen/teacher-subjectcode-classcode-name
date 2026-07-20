@@ -114,7 +114,7 @@ export function loadGradebook(path = "gradebook/grades.csv", sectionArg = null) 
     repo: col("repo"), github: col("githubAccount"), name: col("fullName"),
     num: col("studentNumber"), email: col("studentEmail"), classCode: col("classCode"),
     assignment: col("assignment"), sha: col("sha"), passed: col("passed"), total: col("total"),
-    gradedAt: col("gradedAt"), late: col("late"),
+    gradedAt: col("gradedAt"), late: col("late"), aiScore: col("aiScore"), notes: col("notes"),
   };
   const rows = lines.slice(1).filter(Boolean).map((ln) => {
     const f = parseCsvLine(ln);
@@ -123,6 +123,7 @@ export function loadGradebook(path = "gradebook/grades.csv", sectionArg = null) 
       email: f[ci.email], classCode: f[ci.classCode], assignment: f[ci.assignment],
       sha: ci.sha >= 0 ? f[ci.sha] || "" : "", passed: +f[ci.passed], total: +f[ci.total],
       gradedAt: f[ci.gradedAt] || "", late: ci.late >= 0 ? f[ci.late] === "true" : false,
+      aiScore: ci.aiScore >= 0 ? (f[ci.aiScore] ?? "") : "", notes: ci.notes >= 0 ? (f[ci.notes] || "") : "",
     };
   });
   // Section: explicit, else the MOST COMMON classCode (mode, not "the only one" -
@@ -169,14 +170,14 @@ export function consolidate(rows, section) {
     if (r.name && !g.name) g.name = r.name;
   });
   for (const g of byRoot.values()) {
-    g.scores = new Map();   // ourId -> { passed, total, gradedAt, repo, sha, late }
+    g.scores = new Map();   // ourId -> { passed, total, gradedAt, repo, sha, late, aiScore, notes }
     for (const r of g.rows) {
       if (!isAssignmentId(r.assignment)) continue;   // ignore non-assignment artifact values
       const prev = g.scores.get(r.assignment);
       if (!prev || r.gradedAt > prev.gradedAt) {
         g.scores.set(r.assignment, {
           passed: r.passed, total: r.total, gradedAt: r.gradedAt,
-          repo: r.repo, sha: r.sha, late: r.late,
+          repo: r.repo, sha: r.sha, late: r.late, aiScore: r.aiScore, notes: r.notes,
         });
       }
     }
