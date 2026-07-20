@@ -1,0 +1,13 @@
+{
+  "name": "attendance-scanner-theme",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Assembles the GRAIN look (from @tjakoen/grain) into attendance/assets/grain.css for the Pages scanner. GRAIN is consumed as a package, never forked - bump the version + reinstall to pick up a new GRAIN.",
+  "scripts": {
+    "build": "node build-theme.mjs"
+  },
+  "dependencies": {
+    "@tjakoen/grain": "^0.1.0"
+  }
+}

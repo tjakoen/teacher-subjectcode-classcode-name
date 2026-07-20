@@ -3,3 +3,7 @@ node_modules/
 work/
 *.log
 .grade-work/
+
+# Attendance scanner theme: build products assembled from @tjakoen/grain (never committed)
+attendance/assets/
+attendance/package-lock.json

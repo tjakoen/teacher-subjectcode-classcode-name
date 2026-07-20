@@ -12,77 +12,112 @@
   attendance/sessions/<date>/<HHMM>-<label>.csv. Committing is safe to do anytime
   and as often as you like - it merges by student number. Signatures are verified
   server-side by verify-attendance (the secret never lives here).
+
+  Look: consumes the GRAIN design system (Sourdough theme) from assets/grain.css,
+  which the build step assembles from the @tjakoen/grain package (never a copy).
+  The inline <style> below is ONLY this app's own chrome + sanctioned token-slot
+  overrides - it never redefines GRAIN's components.
 -->
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<link rel="stylesheet" href="assets/grain.css">
 <style>
-  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --card:#f6f6f6; --ok:#137333; --bad:#b00020; --accent:#0b57d0; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#151515; --fg:#eee; --muted:#999; --line:#333; --card:#1f1f1f; --ok:#5cd07a; --bad:#ff6b6b; --accent:#7aa7ff; } }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--fg); }
-  header { padding:.75rem 1rem; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
-  header b { font-size:1.05rem; } header .sec { color:var(--muted); font-size:.85rem; }
-  main { max-width:640px; margin:0 auto; padding:1rem; }
-  section { border:1px solid var(--line); border-radius:10px; padding:1rem; margin-bottom:1rem; background:var(--card); }
-  label { display:block; font-size:.8rem; color:var(--muted); margin:.5rem 0 .15rem; }
-  input { width:100%; padding:.55rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font-size:1rem; }
-  .row { display:flex; gap:.5rem; } .row > * { flex:1; }
-  button { padding:.6rem .9rem; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:1rem; font-weight:600; cursor:pointer; }
-  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  #reader { width:100%; border-radius:10px; overflow:hidden; }
-  .status { padding:.6rem .8rem; border-radius:8px; font-weight:600; margin-top:.5rem; }
-  .status.ok { background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok); }
-  .status.dup { background:color-mix(in srgb, var(--muted) 20%, transparent); color:var(--muted); }
-  .status.bad { background:color-mix(in srgb, var(--bad) 18%, transparent); color:var(--bad); }
-  ul.list { list-style:none; padding:0; margin:.5rem 0 0; }
-  ul.list li { display:flex; justify-content:space-between; gap:.5rem; padding:.4rem 0; border-bottom:1px solid var(--line); font-size:.95rem; }
-  ul.list li small { color:var(--muted); }
-  ul.list li button { background:transparent; color:var(--bad); border:0; font-size:.85rem; padding:.1rem .4rem; }
-  .count { font-weight:700; } .muted { color:var(--muted); font-size:.85rem; }
-  .hide { display:none; }
+  /* --- App layer: GRAIN (assets/grain.css) owns the whole look - tokens, fonts,
+     base styling, and the .btn / .field / .card / .list components used below. This
+     block adds only (a) token SLOTS overridden the GRAIN-sanctioned way (never edits
+     to GRAIN), and (b) app-specific chrome GRAIN has no component for (the camera
+     reader, the scan-result banner, the compact app bar). --- */
+  :root {
+    color-scheme: light dark;
+    /* GRAIN collapses success/danger to ink by design; a door scanner needs the fast
+       green/red read at a glance, so we re-point those token slots (the supported way
+       to theme GRAIN) - the rest of the palette stays pure Sourdough. */
+    --color-success: #137333; --color-success-soft: color-mix(in srgb, #137333 16%, transparent);
+    --color-danger:  #b00020; --color-danger-soft:  color-mix(in srgb, #b00020 16%, transparent);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --color-success:#5cd07a; --color-danger:#ff6b6b; }
+  }
+
+  body { max-width: 640px; margin: 0 auto; padding: 0 var(--space-4) var(--space-6); }
+  .hide { display: none !important; }
+  .muted { color: var(--color-muted); font-size: var(--text-sm); margin: 0; }
+
+  .appbar { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap;
+    padding: var(--space-4) 0; border-bottom: var(--border); margin-bottom: var(--space-4); }
+  .appbar__title { font-family: var(--font-accent); font-size: var(--text-lg); font-weight: var(--font-weight-semibold); }
+  .appbar .sec { color: var(--color-muted); font-size: var(--text-sm); }
+  .appbar .spacer { flex: 1; }
+
+  /* the config/batch/scan/list panels are GRAIN cards; stack their contents evenly */
+  .card { display:flex; flex-direction:column; gap: var(--space-3); margin-bottom: var(--space-4); }
+  .row { display:flex; gap: var(--space-2); align-items:flex-end; }
+  .row > .field { flex:1; min-width:0; }   /* let fields shrink below content width (no h-scroll on phones) */
+  .field__input { width:100%; min-width:0; }  /* the input is itself a flex item - must be shrinkable too */
+
+  #reader { width:100%; border: var(--border); border-radius: var(--radius-md); overflow:hidden; }
+
+  .status { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+    font-weight: var(--font-weight-semibold); }
+  .status.ok  { background: var(--color-success-soft); color: var(--color-success); }
+  .status.dup { background: var(--paper-2); color: var(--color-muted); }
+  .status.bad { background: var(--color-danger-soft); color: var(--color-danger); }
+
+  .count { font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; }
+  .scanlist { margin: 0; }
+  .scanlist .list__item { display:flex; justify-content:space-between; gap:var(--space-2); align-items:center; }
+  .scanlist small { color: var(--color-muted); }
 </style>
 </head>
 <body>
-<header>
-  <b>Attendance</b>
+<header class="appbar">
+  <span class="appbar__title">Attendance</span>
   <span class="sec" id="hdrSec"></span>
-  <span style="flex:1"></span>
-  <button class="ghost" id="toggleCfg" type="button">Settings</button>
+  <span class="spacer"></span>
+  <button class="btn" data-variant="outline" data-size="sm" id="toggleCfg" type="button">Settings</button>
 </header>
 <main>
 
-  <section id="cfg">
-    <div class="muted">One-time setup. Stored only in this browser.</div>
-    <div class="row"><div><label>Org / owner</label><input id="owner" placeholder="HAU-6APSI"></div>
-      <div><label>Teacher repo</label><input id="repo" placeholder="teacher-6apsi-2240-tjakoen"></div></div>
-    <label>Section</label><input id="section" placeholder="2240">
-    <label>Personal access token (Contents: read + write, this repo only)</label>
-    <input id="pat" type="password" placeholder="github_pat_...">
-    <div class="row" style="margin-top:.75rem">
-      <button id="saveCfg" type="button">Save + load roster</button>
+  <section id="cfg" class="card" data-pad="sm">
+    <p class="muted">One-time setup. Stored only in this browser.</p>
+    <div class="row">
+      <label class="field"><span class="field__label">Org / owner</span>
+        <input class="field__input" id="owner" placeholder="HAU-6APSI"></label>
+      <label class="field"><span class="field__label">Teacher repo</span>
+        <input class="field__input" id="repo" placeholder="teacher-6apsi-2240-tjakoen"></label>
     </div>
-    <div id="cfgMsg" class="muted" style="margin-top:.5rem"></div>
+    <label class="field"><span class="field__label">Section</span>
+      <input class="field__input" id="section" placeholder="2240"></label>
+    <label class="field"><span class="field__label">Personal access token (Contents: read + write, this repo only)</span>
+      <input class="field__input" id="pat" type="password" placeholder="github_pat_..."></label>
+    <div class="row">
+      <button class="btn" id="saveCfg" type="button">Save + load roster</button>
+    </div>
+    <p id="cfgMsg" class="muted"></p>
   </section>
 
-  <section id="batchBox" class="hide">
-    <label>Batch label (e.g. on-time, late, class-A)</label>
-    <div class="row"><input id="label" value="on-time">
-      <button id="newBatch" type="button" style="flex:0 0 auto">New batch</button></div>
-    <div class="muted" id="batchInfo" style="margin-top:.5rem"></div>
+  <section id="batchBox" class="card hide" data-pad="sm">
+    <div class="field">
+      <span class="field__label">Batch label (e.g. on-time, late, class-A)</span>
+      <div class="row">
+        <input class="field__input" id="label" value="on-time">
+        <button class="btn" data-variant="soft" id="newBatch" type="button" style="flex:0 0 auto">New batch</button>
+      </div>
+    </div>
+    <p class="muted" id="batchInfo"></p>
   </section>
 
-  <section id="scanBox" class="hide">
+  <section id="scanBox" class="card hide" data-pad="sm">
     <div id="reader"></div>
     <div id="status" class="status hide"></div>
   </section>
 
-  <section id="listBox" class="hide">
-    <div>Scanned this batch: <span class="count" id="count">0</span></div>
-    <ul class="list" id="list"></ul>
-    <div class="row" style="margin-top:.75rem">
-      <button id="commit" type="button">Commit batch</button>
+  <section id="listBox" class="card hide" data-pad="sm">
+    <p>Scanned this batch: <span class="count" id="count">0</span></p>
+    <ul class="list scanlist" id="list"></ul>
+    <div class="row">
+      <button class="btn" id="commit" type="button">Commit batch</button>
     </div>
-    <div id="commitMsg" class="muted" style="margin-top:.5rem"></div>
+    <p id="commitMsg" class="muted"></p>
   </section>
 
 </main>
@@ -181,7 +216,8 @@ function renderList() {
   const ul = $("list"); ul.innerHTML = "";
   [...batch.rows.values()].forEach((r) => {
     const li = document.createElement("li");
-    li.innerHTML = `<span>${r.name || "#" + r.num} <small>${r.num}</small></span><span><small>${r.ts.slice(11)}</small> <button>x</button></span>`;
+    li.className = "list__item";
+    li.innerHTML = `<span>${r.name || "#" + r.num} <small>${r.num}</small></span><span><small>${r.ts.slice(11)}</small> <button class="btn" data-variant="soft" data-size="sm" data-status="danger" type="button">Remove</button></span>`;
     li.querySelector("button").onclick = () => { batch.rows.delete(r.num); renderList(); };
     ul.appendChild(li);
   });

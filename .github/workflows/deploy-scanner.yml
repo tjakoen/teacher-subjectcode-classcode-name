@@ -1,22 +1,31 @@
 name: Deploy attendance scanner
 
-# Publishes ONLY attendance/scanner.html to GitHub Pages (as index.html). The
-# rest of the repo - the gradebook and its student PII - is never in the Pages
-# artifact, so the published site exposes nothing sensitive even though this repo
-# is private. The scanner itself holds no secret; it talks to the repo only via
-# the fine-grained PAT the teacher pastes at runtime.
+# Publishes ONLY the attendance scanner (scanner.html as index.html) plus its
+# assembled look (attendance/assets/) to GitHub Pages. The rest of the repo - the
+# gradebook and its student PII - is never in the Pages artifact, so the published
+# site exposes nothing sensitive even though this repo is private. The scanner
+# itself holds no secret; it talks to the repo only via the fine-grained PAT the
+# teacher pastes at runtime.
 #
-# One-time setup: repo Settings -> Pages -> Source = "GitHub Actions".
+# The look is GRAIN (@tjakoen/grain), CONSUMED as a package: this job installs it
+# and runs attendance/build-theme.mjs to assemble attendance/assets/grain.css. That
+# file is a build product (gitignored), never a copy of GRAIN checked into the repo.
+#
+# No manual setup: configure-pages enables the Pages site on the first run.
 # Site URL after the first run: https://<owner>.github.io/<repo>/
 on:
   push:
     paths:
       - "attendance/scanner.html"
+      - "attendance/build-theme.mjs"
+      - "attendance/package.json"
+      - "attendance/.npmrc"
       - ".github/workflows/deploy-scanner.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
+  packages: read      # read @tjakoen/grain from GitHub Packages
   pages: write
   id-token: write
 
@@ -32,10 +41,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Stage only the scanner (nothing else is published)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install GRAIN + assemble the scanner look
+        working-directory: attendance
+        run: |
+          # Auth for GitHub Packages (public packages still require a token to read).
+          # The committed .npmrc only maps the @tjakoen scope; add the token here.
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Stage the scanner + its assets (nothing else is published)
         run: |
           mkdir -p _site
           cp attendance/scanner.html _site/index.html
+          cp -R attendance/assets _site/assets
       - uses: actions/configure-pages@v5
         with:
           enablement: true      # create the Pages site on first run (no manual toggle)
