@@ -131,7 +131,10 @@ mkdirSync(WORK, { recursive: true });
 // long to pass as a -f argument). sha is required to overwrite an existing file.
 const putFile = (repo, path, base64, message) => {
   const sha = trySh(`gh api repos/${OWNER}/${repo}/contents/${path} -q .sha`);
-  const body = { message, content: base64 };
+  // Author as course-bot, not the token owner (the contents API attributes the
+  // commit to the PAT owner unless committer/author are set explicitly).
+  const bot = { name: "course-bot", email: "course-bot@users.noreply.github.com" };
+  const body = { message, content: base64, committer: bot, author: bot };
   if (sha) body.sha = sha;
   const bodyFile = `${WORK}/body.json`;
   writeFileSync(bodyFile, JSON.stringify(body));

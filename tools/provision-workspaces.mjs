@@ -208,7 +208,10 @@ const putStudentJson = (repo, sj) => {
   const content = Buffer.from(JSON.stringify(sj, null, 2) + "\n", "utf8").toString("base64");
   const existing = trySh(`gh api repos/${OWNER}/${repo}/contents/student.json -q .sha`);
   const shaArg = existing ? `-f sha=${existing}` : "";
-  sh(`gh api -X PUT repos/${OWNER}/${repo}/contents/student.json -f message=":bust_in_silhouette: Fill student.json from student activity data" -f content=${content} ${shaArg}`);
+  // Author the commit as course-bot, not the token owner (gh api attributes the
+  // commit to the PAT owner unless committer/author are set explicitly).
+  const bot = `-f "committer[name]=course-bot" -f "committer[email]=course-bot@users.noreply.github.com" -f "author[name]=course-bot" -f "author[email]=course-bot@users.noreply.github.com"`;
+  sh(`gh api -X PUT repos/${OWNER}/${repo}/contents/student.json -f message=":bust_in_silhouette: Fill student.json from student activity data" -f content=${content} ${bot} ${shaArg}`);
 };
 
 // CREATE + SCAFFOLD push the scaffold via git, NOT `gh repo create --template`:

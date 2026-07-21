@@ -69,12 +69,18 @@ const allRows = lines.slice(1).filter(Boolean).map(parseCsvLine).map((f) => ({
   repo: get(f, "repo"), githubAccount: get(f, "githubAccount"), fullName: get(f, "fullName"),
   studentNumber: get(f, "studentNumber"), studentEmail: get(f, "studentEmail"), classCode: get(f, "classCode"),
   assignment: get(f, "assignment"), sha: get(f, "sha"), score: get(f, "score"), gradedAt: get(f, "gradedAt"),
-  late: get(f, "late") === "true", notes: decNotes(get(f, "notes")),
+  late: get(f, "late") === "true", notes: decNotes(get(f, "notes")), aiScore: get(f, "aiScore"),
 }));
 
-// Rows in this section, for published activities only.
+// An AI-graded activity is held until reviewed: a blank aiScore means the
+// instructor has not cleared that student, so we never deliver it (same gate
+// canvas-push uses). This keeps a blank aiScore holding a student out of BOTH
+// the student publish and the Canvas push, not just Canvas.
+const held = (r) => policy.get(r.assignment)?.aiGraded && (r.aiScore == null || String(r.aiScore).trim() === "");
+
+// Rows in this section, for published activities only, excluding held students.
 const rows = allRows.filter((r) =>
-  r.repo.includes(`-${section}-`) && publishable(r.assignment) && (!onlyRepo || r.repo === onlyRepo));
+  r.repo.includes(`-${section}-`) && publishable(r.assignment) && !held(r) && (!onlyRepo || r.repo === onlyRepo));
 if (!rows.length) {
   const flagged = [...policy.entries()].filter(([, p]) => p.publish).map(([id]) => id);
   console.log(`Nothing to publish for section ${section}.`);

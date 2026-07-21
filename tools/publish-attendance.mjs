@@ -148,7 +148,10 @@ mkdirSync(WORK, { recursive: true });
 // Create or overwrite a file via the contents API. sha is required to overwrite.
 const putFile = (repo, path, body, message) => {
   const sha = trySh(`gh api repos/${OWNER}/${repo}/contents/${path} -q .sha`);
-  const payload = { message, content: Buffer.from(body, "utf8").toString("base64") };
+  // Author as course-bot, not the token owner (the contents API attributes the
+  // commit to the PAT owner unless committer/author are set explicitly).
+  const bot = { name: "course-bot", email: "course-bot@users.noreply.github.com" };
+  const payload = { message, content: Buffer.from(body, "utf8").toString("base64"), committer: bot, author: bot };
   if (sha) payload.sha = sha;
   const bodyFile = `${WORK}/body.json`;
   writeFileSync(bodyFile, JSON.stringify(payload));
