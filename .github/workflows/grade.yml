@@ -29,7 +29,6 @@ on:
 
 permissions:
   contents: write   # to push the gradebook back to this repo
-  models: read      # use GitHub Models (gpt-4o-mini) for formative AI feedback
 
 # Serialize grade runs so two of them never race on the gradebook commit.
 concurrency:
@@ -41,7 +40,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.ORG_PAT }}             # cross-repo: clone student submissions
-      MODELS_TOKEN: ${{ secrets.MODELS_PAT || secrets.GITHUB_TOKEN }}  # PAT (account Models access) preferred; else built-in token
       GRADE_OWNER: ${{ github.repository_owner }}   # the course org / account to enumerate
       SECTION: "CLASSCODE"                          # FILL IN: LOCKED to one class, e.g. "0000"
     steps:

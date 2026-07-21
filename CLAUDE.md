@@ -52,7 +52,8 @@ delivers results to them only through a deliberate publish step.
 Class-specific values live in **`course.config.json`** (orgs, `teachers` for the
 access audit, workspace template owner) and each workflow's `SECTION` /
 `WORKSPACE_PREFIX` env, plus the
-`CANVAS_TOKEN` / `CANVAS_BASE_URL` / `ORG_PAT` / `MODELS_PAT` secrets. Nothing
+`CANVAS_TOKEN` / `CANVAS_BASE_URL` / `ORG_PAT` secrets (AI feedback needs no key:
+notes are drafted in a Claude Code session via the grader-ui prompt). Nothing
 class-specific is hardcoded in `tools/` - read config, do not edit the tools to
 change a value.
 
