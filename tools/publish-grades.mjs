@@ -167,7 +167,10 @@ function pushWorkspaceGrades(ws, studentRows) {
     "", "_Grades issued by the instructor. Source of truth is the teacher gradebook._", "",
   ].join("\n");
   writeFileSync(`${dir}/GRADES.md`, md);
-  quiet(`git -C ${dir} add -A grades GRADES.md FEEDBACK.md`);
+  quiet(`git -C ${dir} add -A grades GRADES.md`);
+  // FEEDBACK.md may have never existed in this workspace (no feedback yet);
+  // git add fails on a pathspec that matches neither worktree nor index.
+  try { quiet(`git -C ${dir} add -A FEEDBACK.md`); } catch {}
   try {
     quiet(`git -C ${dir} -c user.name=course-bot -c user.email=course-bot@users.noreply.github.com commit -m ":memo: Update grades"`);
     quiet(`git -C ${dir} push -q`);
