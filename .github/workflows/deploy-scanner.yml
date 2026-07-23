@@ -15,6 +15,7 @@ name: Deploy attendance scanner
 # Site URL after the first run: https://<owner>.github.io/<repo>/
 on:
   push:
+    branches: [main]
     paths:
       - "attendance/scanner.html"
       - "attendance/build-theme.mjs"
