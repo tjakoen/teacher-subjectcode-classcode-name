@@ -71,19 +71,17 @@ jobs:
                 git commit -m ":books: Publish $UNIT"
                 git push -u origin main
               else
-                # -B (not -b) makes re-runs idempotent: create-or-reset the
-                # branch even if a leftover publish/ branch was checked out.
-                branch="publish/$UNIT"
-                git checkout -B "$branch"
+                # Commit directly on the default branch as course-bot - no PR.
+                # (The old branch+PR+merge dance attributed every PR and merge
+                # commit to the ORG_PAT owner's profile, and concurrent unit
+                # publishes raced each other's merges.) If something landed
+                # since the clone, rebase our content-only commit and retry.
+                git checkout "$base"
                 git add content
                 git diff --cached --quiet && { echo "no changes for $repo"; exit 0; }
                 git commit -m ":books: Publish $UNIT"
-                git push -u origin "$branch" --force
-                gh pr create --title ":books: Publish $UNIT" \
-                  --body "Auto-published course material: \`$UNIT\`." \
-                  --head "$branch" --base "$base" || true
-                gh pr merge "$branch" --merge --delete-branch --admin \
-                  || gh pr merge "$branch" --merge --delete-branch || true
+                git push origin "$base" \
+                  || { git pull --rebase origin "$base" && git push origin "$base"; }
               fi
             ) || echo "::warning::publish failed for $repo (continuing)"
             echo "::endgroup::"
