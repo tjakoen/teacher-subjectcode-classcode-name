@@ -202,8 +202,17 @@ function showStatus(cls, text) {
 }
 
 function onScan(text) {
-  const [num, sig] = String(text).split(".");
+  // QR is <section>.<studentNumber>.<sig> (current) or <studentNumber>.<sig>
+  // (legacy, sectionless). A three-field code from another class is rejected
+  // here, before it is ever recorded; a two-field code falls back to the
+  // verify-time signature guard. The CSV still stores only number + signature.
+  const parts = String(text).split(".");
+  let qrSection = null, num, sig;
+  if (parts.length >= 3) { [qrSection, num, sig] = parts; } else { [num, sig] = parts; }
   if (!num) { showStatus("bad", "Unreadable QR"); return; }
+  if (qrSection && cfg.section && qrSection !== cfg.section) {
+    showStatus("bad", `Wrong class - QR is for section ${qrSection}, not ${cfg.section}`); return;
+  }
   if (batch.rows.has(num)) { showStatus("dup", `Already scanned: ${roster[num] || num}`); return; }
   const name = roster[num] || "";
   batch.rows.set(num, { num, name, sig: sig || "", ts: localStamp(new Date()) });

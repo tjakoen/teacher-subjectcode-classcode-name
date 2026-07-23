@@ -2,13 +2,18 @@
 // Generate a signed Attendance QR for every student workspace that lacks one,
 // and (re)build the teacher-side roster the scanner uses to show names.
 //
-// The QR encodes  <studentNumber>.<sig>  where
+// The QR encodes  <section>.<studentNumber>.<sig>  where
 //   sig = first 12 base64url chars of HMAC-SHA256(ATTENDANCE_HMAC_SECRET,
 //         "<section>:<studentNumber>").
-// The student number is in the clear (so the scanner can look up a name); the
+// The leading section lets the scanner reject a QR from another class AT SCAN
+// TIME (before it records anything), so a student scanned into the wrong
+// section's scanner is caught on the spot instead of only later by verify. The
+// student number is in the clear (so the scanner can look up a name); the
 // signature is what a forger cannot mint without the secret. Verification lives
 // ONLY in verify-attendance.mjs (a workflow that holds the secret), NEVER in the
 // public scanner page - so putting the scanner on GitHub Pages leaks nothing.
+// (Legacy QRs minted as <studentNumber>.<sig> still scan: the scanner treats a
+// two-field code as sectionless and falls back to the verify-time guard.)
 //
 // For each workspace repo (WORKSPACE_PREFIX*) with a filled student.json it:
 //   - renders attendance/attendance-qr.png (skipped if present; --force to redo)
@@ -54,7 +59,9 @@ if (!SECRET) { console.error("ATTENDANCE_HMAC_SECRET not set - cannot sign QRs (
 // sig = first 12 base64url chars of HMAC-SHA256(secret, "<section>:<num>").
 const sign = (num) =>
   createHmac("sha256", SECRET).update(`${section}:${num}`).digest("base64url").slice(0, 12);
-const qrText = (num) => `${num}.${sign(num)}`;
+// The QR carries the section so the scanner can reject a wrong-class code before
+// recording it; the signature still binds the section too (defense in depth).
+const qrText = (num) => `${section}.${num}.${sign(num)}`;
 
 // The student's original-case handle in a workspace name
 // (student-6apsi-2240-JZRain -> "JZRain").
