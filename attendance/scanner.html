@@ -15,8 +15,11 @@
 
   Look: consumes the GRAIN design system (Sourdough theme) from assets/grain.css,
   which the build step assembles from the @tjakoen/grain package (never a copy).
-  The inline <style> below is ONLY this app's own chrome + sanctioned token-slot
-  overrides - it never redefines GRAIN's components.
+  Real GRAIN components throughout: card, b-button, b-input, b-badge, callout,
+  status-list, made-with (the fleet byline footer), plus the grade mechanism
+  (styles/grain.css) - human content wears data-grade="smooth", the app title
+  data-grade="accent". The inline <style> below is ONLY this app's own chrome +
+  sanctioned token-slot overrides - it never redefines GRAIN's components.
 -->
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <link rel="stylesheet" href="assets/grain.css">
@@ -40,37 +43,35 @@
 
   body { max-width: 640px; margin: 0 auto; padding: 0 var(--space-4) var(--space-6); }
   .hide { display: none !important; }
-  .muted { color: var(--color-muted); font-size: var(--text-sm); margin: 0; }
 
   .appbar { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap;
     padding: var(--space-4) 0; border-bottom: var(--border); margin-bottom: var(--space-4); }
-  .appbar__title { font-family: var(--font-accent); font-size: var(--text-lg); font-weight: var(--font-weight-semibold); }
+  .appbar__title { font-size: var(--text-lg); font-weight: var(--font-weight-semibold); }  /* face comes from data-grade="accent" */
   .appbar .sec { color: var(--color-muted); font-size: var(--text-sm); }
   .appbar .spacer { flex: 1; }
 
-  /* the config/batch/scan/list panels are GRAIN cards; stack their contents evenly */
+  /* the config/batch/scan/list panels are GRAIN cards; stack their contents evenly
+     (composition/layout only - the components keep their own styling) */
   .card { display:flex; flex-direction:column; gap: var(--space-3); margin-bottom: var(--space-4); }
+  .card p, .card .callout { margin: 0; }   /* the flex gap owns the rhythm inside a card */
   .row { display:flex; gap: var(--space-2); align-items:flex-end; }
   .row > .field { flex:1; min-width:0; }   /* let fields shrink below content width (no h-scroll on phones) */
   .field__input { width:100%; min-width:0; }  /* the input is itself a flex item - must be shrinkable too */
 
   #reader { width:100%; border: var(--border); border-radius: var(--radius-md); overflow:hidden; }
 
+  /* the scan-result banner is app chrome GRAIN has no component for: a door scanner
+     needs the fast green/red read at a glance (the token slots above carry the hues) */
   .status { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
     font-weight: var(--font-weight-semibold); }
   .status.ok  { background: var(--color-success-soft); color: var(--color-success); }
   .status.dup { background: var(--paper-2); color: var(--color-muted); }
   .status.bad { background: var(--color-danger-soft); color: var(--color-danger); }
-
-  .count { font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; }
-  .scanlist { margin: 0; }
-  .scanlist .list__item { display:flex; justify-content:space-between; gap:var(--space-2); align-items:center; }
-  .scanlist small { color: var(--color-muted); }
 </style>
 </head>
 <body>
 <header class="appbar">
-  <span class="appbar__title">Attendance</span>
+  <span class="appbar__title" data-grade="accent">Attendance</span>
   <span class="sec" id="hdrSec"></span>
   <span class="spacer"></span>
   <button class="btn" data-variant="outline" data-size="sm" id="toggleCfg" type="button">Settings</button>
@@ -78,7 +79,7 @@
 <main>
 
   <section id="cfg" class="card" data-pad="sm">
-    <p class="muted">One-time setup. Stored only in this browser.</p>
+    <blockquote class="callout">One-time setup. Stored only in this browser.</blockquote>
     <div class="row">
       <label class="field"><span class="field__label">Org / owner</span>
         <input class="field__input" id="owner" placeholder="HAU-6APSI"></label>
@@ -112,8 +113,8 @@
   </section>
 
   <section id="listBox" class="card hide" data-pad="sm">
-    <p>Scanned this batch: <span class="count" id="count">0</span></p>
-    <ul class="list scanlist" id="list"></ul>
+    <p>Scanned this batch: <span class="badge" data-status="active" id="count">0</span></p>
+    <ul class="status-list" id="list" data-grade="smooth"></ul>
     <div class="row">
       <button class="btn" id="commit" type="button">Commit batch</button>
     </div>
@@ -121,6 +122,7 @@
   </section>
 
 </main>
+<footer class="made-with">made with <a href="https://tjakoen.github.io/grain">GRAIN</a> by <a href="https://tjakoen.github.io">tjakoen</a></footer>
 <script>
 const $ = (id) => document.getElementById(id);
 const b64 = (str) => btoa(String.fromCharCode(...new TextEncoder().encode(str)));
@@ -225,8 +227,8 @@ function renderList() {
   const ul = $("list"); ul.innerHTML = "";
   [...batch.rows.values()].forEach((r) => {
     const li = document.createElement("li");
-    li.className = "list__item";
-    li.innerHTML = `<span>${r.name || "#" + r.num} <small>${r.num}</small></span><span><small>${r.ts.slice(11)}</small> <button class="btn" data-variant="soft" data-size="sm" data-status="danger" type="button">Remove</button></span>`;
+    li.className = "status-list__item";
+    li.innerHTML = `<span class="status-list__mark">✓</span><span class="status-list__title">${r.name || "#" + r.num} <span class="badge" data-status="archived">${r.num}</span></span><span class="status-list__meta">${r.ts.slice(11)} <button class="btn" data-variant="soft" data-size="sm" data-status="danger" type="button">Remove</button></span>`;
     li.querySelector("button").onclick = () => { batch.rows.delete(r.num); renderList(); };
     ul.appendChild(li);
   });

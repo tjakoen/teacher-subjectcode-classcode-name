@@ -13,18 +13,23 @@ const fontDataUri = (file) =>
   "data:font/woff2;base64," +
   readFileSync(fileURLToPath(import.meta.resolve("@tjakoen/grain/fonts/" + file))).toString("base64");
 
-// The exact GRAIN pieces the scanner uses: tokens + base styling + only the components
-// that appear in the markup ("pull only the component CSS you use"). The grade-as-signal
-// mechanism (styles/grain.css) is intentionally omitted — the scanner has no AI/human
-// provenance surface. Add "styles/grain.css" here if that ever changes.
+// The exact GRAIN pieces the scanner uses: tokens + base styling + the grade mechanism +
+// only the components that appear in the markup ("pull only the component CSS you use").
+// styles/grain.css is in: the page carries data-grade="smooth" on its human content (the
+// scanned-names list) and data-grade="accent" on the app title, and fields get GRAIN's
+// draft-at-rest / clean-while-editing behavior — all of which read the grade mechanism.
 const PARTS = [
   "styles/variables.css",                       // Sourdough tokens — REQUIRED; everything reads var(--token)
-  "styles/global.css",                          // base element styling + masthead
+  "styles/global.css",                          // base element styling + masthead + .muted
+  "styles/grain.css",                           // grade-as-signal mechanism: [data-grade], field draft/clean, caret keyframes
   "components/atoms/b-text/b-text.css",         // .t / .masthead typography
   "components/atoms/b-button/b-button.css",     // .btn
   "components/atoms/b-input/b-input.css",        // .field / .field__label / .field__input
-  "components/atoms/b-list/b-list.css",          // .list / .list__item
+  "components/atoms/b-badge/b-badge.css",        // .badge — batch count + student-number tags
   "components/molecules/card/card.css",         // .card / .card__title / .card__body
+  "components/molecules/callout/callout.css",   // .callout — the one-time-setup aside
+  "components/molecules/status-list/status-list.css", // .status-list — the scanned-this-batch rows
+  "components/molecules/made-with/made-with.css",     // .made-with — the fleet byline footer
 ];
 
 let css = PARTS.map((p) => `/* ===== @tjakoen/grain/${p} ===== */\n${read(p)}`).join("\n\n");
