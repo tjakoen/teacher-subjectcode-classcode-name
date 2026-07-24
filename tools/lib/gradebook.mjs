@@ -55,12 +55,18 @@ export const normEmail = (s) => String(s ?? "").trim().toLowerCase();
 export const normGh = (s) =>
   String(s ?? "").trim().toLowerCase().replace(/^@/, "").replace(/^https?:\/\/github\.com\//, "");
 // Leading m#a# / q# token of a label (Canvas header or assignment name) -> our id.
+// Also maps a whole-name "prelim" / "midterm" (exact, case-insensitive) so those
+// named activities link to their Canvas assignment. Exact-only on purpose: it
+// must NOT swallow "Prelim Journal Submission" / "Prelim Exam - ..." etc.
 export const tokenToId = (label) => {
-  const m = String(label).match(/^\s*(m\d+a\d+|q\d+)\b/i);
-  return m ? m[1].toLowerCase() : null;
+  const s = String(label).trim();
+  const m = s.match(/^\s*(m\d+a\d+|q\d+)\b/i);
+  if (m) return m[1].toLowerCase();
+  const lc = s.toLowerCase();
+  return (lc === "prelim" || lc === "midterm") ? lc : null;
 };
-// The student's chosen suffix in a repo name, e.g. m1a1-0000-Santos -> "santos",
-// student-6xxx-0000-jdelacruz -> "jdelacruz". Bridges a blank-identity row to a
+// The student's chosen suffix in a repo name, e.g. m1a1-2125-Catap -> "catap",
+// student-6ADET-2125-skpriniel -> "skpriniel". Bridges a blank-identity row to a
 // sibling that has identity, via the github-account namespace.
 export const repoStem = (repo, section) => {
   const r = String(repo);
