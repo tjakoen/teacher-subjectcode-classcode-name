@@ -34,7 +34,7 @@
 
 import { execSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 
 const section = process.argv[2];
 const execute = process.argv.includes("--execute");
@@ -99,7 +99,14 @@ const pfx = WORKSPACE_PREFIX.toLowerCase();
 const workspaces = allRepos.filter((r) => r.name.toLowerCase().startsWith(pfx) && !r.isEmpty);
 
 const plan = { generate: [], have: [], skip: [] };
-const roster = {}; // studentNumber -> fullName (for the scanner)
+// studentNumber -> fullName (for the scanner). On an --only run we MERGE into the
+// existing roster so issuing one student's QR never wipes everyone else's names;
+// a full run rebuilds it from every workspace below.
+const roster = {};
+if (only) {
+  try { Object.assign(roster, JSON.parse(readFileSync("attendance/roster.json", "utf8"))); }
+  catch { /* no roster yet - start empty */ }
+}
 for (const { name } of workspaces) {
   const handle = stemOriginal(name);
   if (only && handle.toLowerCase() !== only) continue;
