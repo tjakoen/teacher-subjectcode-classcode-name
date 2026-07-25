@@ -89,6 +89,18 @@ const isAssignmentId = (id) => /^(m\d+a\d+|q\d+)$/i.test(String(id));
 //                  AI-graded activities; still honoured if a class sets it.
 // locked:          a finalized activity -> a first grade is still sent, but the
 //                  push will NOT overwrite a grade Canvas already has.
+// submit: <how>    where the student submits, for Canvas-shell authoring only:
+//                  "repo" (push to GitHub, the default for test/AI activities),
+//                  "url" (paste a link in Canvas - manual/badge activities), or
+//                  "canvas" (taken in Canvas, e.g. a quiz). Never affects grading;
+//                  canvas-sync-assignments reads it to pick the Canvas submission
+//                  type. A "url" activity has no submission repo, so the sweep
+//                  clones nothing and it is graded by hand in Canvas.
+// content: <slug>  the content/ unit folder that teaches this activity, e.g.
+//                  "publish-portfolio". Used only to render the workspace-relative
+//                  lesson pointer in the generated Canvas description.
+// title: <text>    human title for the Canvas assignment (name becomes
+//                  "<ID>: <title>"); optional, id-only if absent.
 export function loadPolicy(path = "grader/assignments.json") {
   const policy = new Map();
   const num = (v) => (v != null && Number.isFinite(+v) ? +v : null);
@@ -104,6 +116,8 @@ export function loadPolicy(path = "grader/assignments.json") {
         // `publish: true` (default false). The publish workflow honors this; the
         // grade workflow never touches student repos.
         publish: !!a.publish,
+        // Canvas-authoring metadata (grading-neutral; see the block above).
+        type: a.type || null, submit: a.submit || null, content: a.content || null, title: a.title || null,
       });
     }
   } catch { /* no assignments.json - treat all as fully auto */ }

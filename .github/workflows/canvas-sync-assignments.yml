@@ -1,0 +1,84 @@
+name: Canvas assignment sync
+
+# Authors this section's Canvas assignments from grader/assignments.json: sets
+# each assignment's name (on create), description, Points Possible, and submission
+# type, and places it in the SUBMISSIONS module. GitHub is the source of truth; on
+# Canvas you only set the due date and publish.
+#
+# SAFE BY DEFAULT. mode=dry-run shows the create/update/module plan and writes
+# nothing; mode=execute applies it (new assignments are created UNPUBLISHED). It
+# never sets a due date or publishes, and on EXISTING assignments it reconciles
+# Points Possible only unless you opt in with the desc/submit/rename toggles.
+#
+# Set these as repo/org secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL   e.g. https://hau.instructure.com
+#   CANVAS_TOKEN      a Canvas access token (assignment-write) for the instructor
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run (plan, no write) | execute (write to Canvas)"
+        type: choice
+        options: ["dry-run", "execute"]
+        default: "dry-run"
+        required: true
+      only:
+        description: "Limit to one activity id (optional, e.g. m6a3)"
+        required: false
+      desc:
+        description: "Also rewrite descriptions on existing assignments (true/false)"
+        default: "false"
+        required: false
+      submit:
+        description: "Also enforce submission type on existing assignments (true/false)"
+        default: "false"
+        required: false
+      rename:
+        description: "Also rename existing assignments to the standard name (true/false)"
+        default: "false"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-sync-assignments
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+      GRADE_OWNER: ${{ github.repository_owner }}   # org, for the template repo links
+      WORKSPACE_PREFIX: "student-SUBJECTCODE-CLASSCODE-"              # for the content pointer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Sync assignments to Canvas
+        run: |
+          ARGS="--report=canvas-sync-report.md"
+          [ -n "${{ github.event.inputs.only }}" ] && ARGS="$ARGS --only=${{ github.event.inputs.only }}"
+          [ "${{ github.event.inputs.mode }}" = "execute" ] && ARGS="$ARGS --execute"
+          [ "${{ github.event.inputs.desc }}" = "true" ] && ARGS="$ARGS --desc"
+          [ "${{ github.event.inputs.submit }}" = "true" ] && ARGS="$ARGS --submit"
+          [ "${{ github.event.inputs.rename }}" = "true" ] && ARGS="$ARGS --rename"
+          node tools/canvas-sync-assignments.mjs $ARGS
+
+      - name: Show the report in the run summary
+        if: always()
+        run: '[ -f canvas-sync-report.md ] && cat canvas-sync-report.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canvas-sync-report
+          path: canvas-sync-report.md
+          if-no-files-found: warn
