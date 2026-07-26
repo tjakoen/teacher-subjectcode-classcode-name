@@ -1,0 +1,63 @@
+name: Resolve identities
+
+# Resolve blank / typo'd studentNumber rows for THIS section: groups a student's
+# repos by handle, uses the live Canvas roster to tell a typo from two real
+# students, and (on execute) copies the good student.json from a sibling into the
+# bad submission repo as course-bot. Always commits a report to
+# reports/identity-fixes.md.
+#
+# DRY RUN BY DEFAULT (execute=false): reports the plan, writes nothing to student
+# repos.
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "Apply the SAFE-FILL/typo fixes to student repos (true), or dry-run (false)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: resolve-identities
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+      GH_TOKEN: ${{ secrets.ORG_PAT }}              # writes student.json into submission repos
+      GRADE_OWNER: ${{ github.repository_owner }}   # the org
+      SECTION: "CLASSCODE"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve identities
+        run: |
+          ARGS="--report=reports/identity-fixes.md"
+          [ "${{ github.event.inputs.execute }}" = "true" ] && ARGS="$ARGS --execute"
+          node tools/resolve-identities.mjs $ARGS
+
+      - name: Show the report in the run summary
+        if: always()
+        run: '[ -f reports/identity-fixes.md ] && cat reports/identity-fixes.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - name: Commit the report
+        if: always()
+        run: |
+          git config user.name "course-bot"
+          git config user.email "course-bot@users.noreply.github.com"
+          git add reports/identity-fixes.md
+          git commit -m ":clipboard: Identity-fixes report (section $SECTION)" || { echo "no changes"; exit 0; }
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && { echo "pushed"; exit 0; }
+            echo "push retry $i"; sleep 3
+          done

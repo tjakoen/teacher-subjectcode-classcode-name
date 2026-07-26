@@ -1,0 +1,59 @@
+name: Prune phantom activities
+
+# Remove phantom activities (no Canvas assignment AND no gradebook rows) from THIS
+# section's grader/assignments.json. Teacher-side only. Always commits a report to
+# reports/prune-phantom-activities.md; on execute it also commits the trimmed
+# assignments.json.
+#
+# DRY RUN BY DEFAULT (execute=false): reports what it would remove, changes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "Actually remove the phantom entries + commit (true), or dry-run (false)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prune-phantom-activities
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+      SECTION: "CLASSCODE"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Prune phantom activities
+        run: |
+          ARGS="--report=reports/prune-phantom-activities.md"
+          [ "${{ github.event.inputs.execute }}" = "true" ] && ARGS="$ARGS --execute"
+          node tools/prune-phantom-activities.mjs $ARGS
+
+      - name: Show the report in the run summary
+        if: always()
+        run: '[ -f reports/prune-phantom-activities.md ] && cat reports/prune-phantom-activities.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - name: Commit report + trimmed assignments.json
+        if: always()
+        run: |
+          git config user.name "course-bot"
+          git config user.email "course-bot@users.noreply.github.com"
+          git add reports/prune-phantom-activities.md grader/assignments.json
+          git commit -m ":wastebasket: Prune phantom activities (section $SECTION)" || { echo "no changes"; exit 0; }
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && { echo "pushed"; exit 0; }
+            echo "push retry $i"; sleep 3
+          done
