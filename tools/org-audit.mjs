@@ -69,9 +69,9 @@ const isSolution = (n) => /(^|-)solution$/i.test(n) || /-solution-/i.test(n);
 const isTeacher  = (n) => /^teacher-/i.test(n);
 const isDemo     = (n) => /live-demo|demo-/i.test(n);
 const isSample   = (n) => /octocat|sample/i.test(n);
-const actOK      = (n) => n.match(/^(m\d+a\d+)-(\d{4})-(.+)$/i);
+const actOK      = (n) => n.match(/^(m\d+a\d+|q\d+|prelim|midterm)-(\d{4})-(.+)$/i);
 const wsOK       = (n) => n.match(/^student-[a-z0-9]+-(\d{4})-(.+)$/i);
-const actish     = (n) => /^m\d+a\d+/i.test(n);
+const actish     = (n) => /^(m\d+a\d+|q\d+|prelim|midterm)/i.test(n);
 const num = (s) => (s && s.studentNumber ? String(s.studentNumber).trim().replace(/^\d{4}-/, "") : "");
 const gh  = (s) => (s && s.githubAccount ? String(s.githubAccount).trim().toLowerCase() : "");
 
@@ -102,7 +102,7 @@ for (const org of ORGS) {
   console.log(`keep: ${cats.keep.length} | activity: ${cats.activity.length} | workspace: ${cats.workspace.length}`);
   if (cats.sample.length)   { console.log(`\nDELETE - samples:`); cats.sample.forEach((n) => console.log(`  ${n}`)); }
   if (cats.junk.length)     { console.log(`\nDELETE/RENAME - junk / non-standard:`); cats.junk.forEach((n) => console.log(`  ${n}   [num=${num(ids[n]) || "-"} gh=${gh(ids[n]) || "-"}]`)); }
-  if (cats.malformed.length){ console.log(`\nRENAME - malformed activity repos:`); cats.malformed.forEach((n) => { const act = (n.match(/^(m\d+a\d+)/i) || [])[1]?.toLowerCase(); console.log(`  ${n}   ->  ${act}-${ids[n]?.classCode || "????"}-${gh(ids[n]) || "UNKNOWN"}   [num=${num(ids[n]) || "-"}]`); }); }
+  if (cats.malformed.length){ console.log(`\nRENAME - malformed activity repos:`); cats.malformed.forEach((n) => { const act = (n.match(/^(m\d+a\d+|q\d+|prelim|midterm)/i) || [])[1]?.toLowerCase(); console.log(`  ${n}   ->  ${act}-${ids[n]?.classCode || "????"}-${gh(ids[n]) || "UNKNOWN"}   [num=${num(ids[n]) || "-"}]`); }); }
   if (dups.length) {
     console.log(`\nDUPLICATE / COLLISION (same number, check names differ = collision):`);
     for (const a of dups) {
