@@ -202,6 +202,13 @@ for (const a of activities) {
   if (targetModule && !moduleItemContentIds.has(+existing.id)) plan.addToModule.push({ id: a.id, contentId: existing.id, name: existing.name });
 }
 
+// Fold of the old assignment-sync audit: Canvas assignments whose name maps to
+// one of our activity ids but that id is NOT in assignments.json (an activity
+// removed from policy, or an id drift) - candidates to hide/delete in Canvas.
+// Uses the FULL policy (not the --only filter). Read-only signal.
+const policyIds = new Set(JSON.parse(readFileSync("grader/assignments.json", "utf8")).map((a) => a.id));
+const canvasOnly = [...byId.entries()].filter(([id]) => !policyIds.has(id)).map(([id, c]) => ({ id, name: c.name }));
+
 // ---- report --------------------------------------------------------------
 const moduleState = targetModule ? `found (adds ${plan.addToModule.length + plan.create.length})` : `**NOT FOUND - create a "${moduleName}" module in Canvas; module placement skipped**`;
 const md = [
@@ -209,6 +216,7 @@ const md = [
   "",
   `- Mode: **${execute ? "EXECUTE (Canvas written)" : "dry run (nothing written)"}**`,
   `- Activities: **${activities.length}**  |  create: **${plan.create.length}**, update: **${plan.update.length}**, unchanged: **${plan.noop.length}**, quizzes skipped: **${plan.quizSkip.length}**`,
+  `- Canvas assignments with NO policy activity: **${canvasOnly.length}**`,
   `- Module "${moduleName}": ${moduleState}`,
   "",
   "> Due date and published state are never set by this tool - set them in Canvas.",
@@ -228,6 +236,7 @@ if (targetModule && (plan.addToModule.length || plan.create.length)) {
   md.push(...plan.create.map(({ a, d }) => `- ${a.id} (${d.name}) - after it is created`), "");
 }
 if (plan.quizSkip.length) md.push("## Skipped - quizzes (imported via QTI, not authored here)", "", ...plan.quizSkip.map((q) => `- ${q.id}`), "");
+if (canvasOnly.length) md.push("## Canvas assignments with NO policy activity (hide/delete in Canvas, or reconcile the id)", "", ...canvasOnly.map((c) => `- ${c.id} ("${c.name}")`), "");
 if (plan.noop.length) md.push(`_Unchanged: ${plan.noop.map((n) => n.id).join(", ")}_`, "");
 
 console.log(`  create ${plan.create.length}, update ${plan.update.length}, unchanged ${plan.noop.length}, quiz-skip ${plan.quizSkip.length}; module ${targetModule ? "ok" : "MISSING"}`);

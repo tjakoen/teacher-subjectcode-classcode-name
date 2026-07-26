@@ -10,7 +10,7 @@
 // reconciles the roster (no grade plan at all).
 //
 // Auth (never commit these):
-//   CANVAS_BASE_URL   e.g. https://your-school.instructure.com
+//   CANVAS_BASE_URL   e.g. https://hau.instructure.com
 //   CANVAS_TOKEN      a Canvas access token with grade-write rights
 //
 // Usage:
@@ -45,6 +45,10 @@ const reportPath = arg("report", "gradebook/canvas-push-report.md");
 const checkOnly = flag("check");
 const execute = flag("execute");
 const withComment = flag("comment");
+// Deliberately overwrite a LOCKED grade that already has a Canvas value, but only
+// on a deterministic activity where our score disagrees with Canvas (the folded
+// canvas-fix-disagreements behavior). Off by default; the lock is respected.
+const overrideLocked = flag("override-locked");
 
 const BASE = (process.env.CANVAS_BASE_URL || "").replace(/\/+$/, "");
 const TOKEN = process.env.CANVAS_TOKEN || "";
@@ -248,9 +252,11 @@ for (const t of targets.filter((x) => x.locked || withComment || x.ai)) {
     subs = await apiGetAll(`/courses/${courseId}/assignments/${t.canvasId}/submissions${wantComments ? "?include[]=submission_comments" : ""}`);
   } catch { subs = []; }   // a fetch hiccup must not block grades; treat as "none known"
   if (t.locked) {
-    alreadyGraded.set(t.canvasId, new Set(
-      subs.filter((s) => s.score != null || (s.grade != null && s.grade !== "")).map((s) => s.user_id),
-    ));
+    // Map userId -> Canvas score (presence still answers "already graded?"; the
+    // value lets --override-locked compare and overwrite only on a disagreement).
+    const graded = new Map();
+    for (const s of subs) if (s.score != null || (s.grade != null && s.grade !== "")) graded.set(s.user_id, s.score);
+    alreadyGraded.set(t.canvasId, graded);
   }
   if (wantComments) {
     const byUser = new Map();
@@ -259,6 +265,7 @@ for (const t of targets.filter((x) => x.locked || withComment || x.ai)) {
   }
 }
 let skippedLocked = 0, skippedComment = 0;
+const overridden = [];   // locked cells --override-locked overwrote on a disagreement
 
 // ---- build the grade plan ------------------------------------------------
 // gradeData[canvasId] = { [userId]: { posted_grade, text_comment? } }
@@ -269,8 +276,17 @@ for (const { student, group } of pairs) {
     const score = group.scores.get(t.ourId);
     const pts = t.ai ? aiPointsFor(score) : pointsFor(score, t);
     if (pts == null) continue;   // AI: not yet reviewed (blank aiScore) -> skip
-    // Locked + already graded in Canvas -> leave it; never overwrite.
-    if (t.locked && alreadyGraded.get(t.canvasId)?.has(student.id)) { skippedLocked++; continue; }
+    // Locked + already graded in Canvas -> normally leave it; never overwrite.
+    // --override-locked overwrites a locked DETERMINISTIC grade only when our
+    // score disagrees with Canvas (the folded canvas-fix-disagreements behavior);
+    // it falls through so the cell is written by the normal execute path.
+    if (t.locked && alreadyGraded.get(t.canvasId)?.has(student.id)) {
+      const canvasScore = alreadyGraded.get(t.canvasId).get(student.id);
+      const disagrees = canvasScore != null && Math.abs(canvasScore - pts) > 0.5;
+      if (overrideLocked && !t.ai && disagrees) {
+        overridden.push({ name: student.name, ourId: t.ourId, from: canvasScore, to: pts, lowers: pts < canvasScore });
+      } else { skippedLocked++; continue; }
+    }
     if (!plan.has(t.canvasId)) plan.set(t.canvasId, {});
     const entry = { posted_grade: pts };
     if (t.ai || withComment) {
@@ -288,6 +304,14 @@ const totalCells = planRows.length;
 md.push("## Grade plan", "", `Cells to write: **${totalCells}** across **${plan.size}** assignment(s).`, "");
 if (skippedLocked) md.push("", `_Left untouched: **${skippedLocked}** locked grade(s) already present in Canvas (not overwritten)._`, "");
 if (skippedComment) md.push("", `_Comments: **${skippedComment}** identical comment(s) already on Canvas, not re-posted (no stacking)._`, "");
+if (overridden.length) {
+  const lowers = overridden.filter((o) => o.lowers).length;
+  md.push("", `## ⚠ Overridden locked grades (${overridden.length}${lowers ? `, ${lowers} LOWER an existing grade` : ""})`, "",
+    "`--override-locked` overwrote these locked grades where our deterministic score disagreed with Canvas. Review the LOWERS rows.", "",
+    "| Student | Assignment | Canvas | -> ours | |", "| --- | --- | --- | --- | --- |",
+    ...overridden.sort((a, b) => a.name.localeCompare(b.name) || a.ourId.localeCompare(b.ourId))
+      .map((o) => `| ${o.name} | ${o.ourId} | ${o.from} | ${o.to} | ${o.lowers ? "LOWERS" : ""} |`), "");
+}
 md.push("| Student | Assignment | Points | Out of | Note |", "| --- | --- | --- | --- | --- |");
 md.push(...planRows
   .sort((a, b) => a.name.localeCompare(b.name) || a.ourId.localeCompare(b.ourId))

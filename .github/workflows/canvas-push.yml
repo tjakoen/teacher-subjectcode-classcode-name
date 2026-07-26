@@ -7,7 +7,7 @@ name: Canvas grade push (API)
 # exact grade plan but writes nothing; mode=execute is the only mode that writes.
 #
 # Set these as repo/org secrets (Settings > Secrets and variables > Actions):
-#   CANVAS_BASE_URL   e.g. https://your-school.instructure.com
+#   CANVAS_BASE_URL   e.g. https://hau.instructure.com
 #   CANVAS_TOKEN      a Canvas access token (grade-write) for the instructor
 on:
   workflow_dispatch:
@@ -25,6 +25,10 @@ on:
         description: "Also post the autograder result as a submission comment (true/false)"
         default: "false"
         required: false
+      override_locked:
+        description: "Overwrite LOCKED grades where our deterministic score disagrees with Canvas (true/false)"
+        default: "false"
+        required: false
 
 permissions:
   contents: read
@@ -39,7 +43,7 @@ jobs:
     env:
       CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
       CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
-      CANVAS_COURSE_ID: "COURSEID"   # FILL IN: this section's Canvas course id, e.g. 38163
+      CANVAS_COURSE_ID: "COURSEID"
       GRADE_OWNER: ${{ github.repository_owner }}   # org, for the commit-reference URL in comments
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +59,7 @@ jobs:
           [ "${{ github.event.inputs.mode }}" = "check" ] && ARGS="$ARGS --check"
           [ "${{ github.event.inputs.mode }}" = "execute" ] && ARGS="$ARGS --execute"
           [ "${{ github.event.inputs.comment }}" = "true" ] && ARGS="$ARGS --comment"
+          [ "${{ github.event.inputs.override_locked }}" = "true" ] && ARGS="$ARGS --override-locked"
           node tools/canvas-push.mjs $ARGS
 
       - name: Show the report in the run summary
