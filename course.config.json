@@ -2,5 +2,8 @@
   "//": "Per-deployment config. Fill in your own values. Nothing class-specific is hardcoded in the tools - they read from here (or from workflow env, which overrides).",
   "orgs": ["COURSE-ORG-A", "COURSE-ORG-B", "COURSE-ORG-C"],
   "teachers": ["your-github-login"],
-  "workspaceTemplate": "your-account/student-subjectcode-classcode-name"
+  "workspaceTemplate": "your-account/student-subjectcode-classcode-name",
+  "courseName": "Your Course Name",
+  "courseCode": "SUBJ-CODE",
+  "//display": "courseName + courseCode are optional display metadata for the Course Console rail: courseName is the group label, courseCode the section suffix. Absent = the console falls back to the name-derived subject code."
 }
