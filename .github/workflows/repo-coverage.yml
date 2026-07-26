@@ -1,0 +1,51 @@
+name: Repo coverage audit
+
+# Read-only "no activity repo left ungraded" audit for THIS section: lists every
+# activity submission repo on the org and checks which have a gradebook row. It
+# commits a report to reports/repo-coverage.md (rendered in the Course Console).
+# Safe to run any time; writes nothing except the report.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repo-coverage
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.ORG_PAT }}              # list the org's repos
+      GRADE_OWNER: ${{ github.repository_owner }}   # the org
+      SECTION: "CLASSCODE"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: List the org's repos
+        run: gh repo list "$GRADE_OWNER" --limit 5000 --json name -q '.[].name' > repos.txt
+
+      - name: Coverage audit
+        run: node tools/repo-coverage.mjs --repos=repos.txt --report=reports/repo-coverage.md
+
+      - name: Show the report in the run summary
+        if: always()
+        run: '[ -f reports/repo-coverage.md ] && cat reports/repo-coverage.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - name: Commit the report
+        if: always()
+        run: |
+          git config user.name "course-bot"
+          git config user.email "course-bot@users.noreply.github.com"
+          git add reports/repo-coverage.md
+          git commit -m ":clipboard: Repo coverage report (section $SECTION)" || { echo "no changes"; exit 0; }
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && { echo "pushed"; exit 0; }
+            echo "push retry $i"; sleep 3
+          done
