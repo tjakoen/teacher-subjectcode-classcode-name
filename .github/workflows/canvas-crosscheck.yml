@@ -1,0 +1,53 @@
+name: Canvas cross-check
+
+# Read-only audit of THIS section's gradebook against Canvas: identity matches,
+# submission presence, screenshot readability, and deterministic score agreement.
+# It writes NOTHING to Canvas; it commits a report to reports/canvas-crosscheck.md
+# (rendered in the Course Console). Safe to run any time.
+#
+# Set these as repo/org secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL   e.g. https://hau.instructure.com
+#   CANVAS_TOKEN      a Canvas access token (read is enough)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: canvas-crosscheck
+  cancel-in-progress: false
+
+jobs:
+  crosscheck:
+    runs-on: ubuntu-latest
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+      SECTION: "CLASSCODE"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cross-check against Canvas
+        run: node tools/canvas-crosscheck.mjs --report=reports/canvas-crosscheck.md
+
+      - name: Show the report in the run summary
+        if: always()
+        run: '[ -f reports/canvas-crosscheck.md ] && cat reports/canvas-crosscheck.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - name: Commit the report
+        if: always()
+        run: |
+          git config user.name "course-bot"
+          git config user.email "course-bot@users.noreply.github.com"
+          git add reports/canvas-crosscheck.md
+          git commit -m ":clipboard: Canvas cross-check report (section $SECTION)" || { echo "no changes"; exit 0; }
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && { echo "pushed"; exit 0; }
+            echo "push retry $i"; sleep 3
+          done
