@@ -14,8 +14,9 @@
 // with access to the repos). The GitHub Actions version wraps this same script.
 
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync, readdirSync,
 } from "node:fs";
 import { runNotesPass } from "./lib/ai-feedback.mjs";
 
@@ -103,11 +104,84 @@ if (existsSync(CSV)) {
 }
 
 // ---- helpers -------------------------------------------------------------
+// One org listing serves the whole sweep. `gh repo list` pages through every
+// repo in the org (thousands), so calling it once per activity re-fetched the
+// same listing 20+ times a run for nothing.
+let allReposCache = null;
+const allRepos = () => (allReposCache ??=
+  JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`)) // limit > org repo count, else repos get silently dropped
+    .map((r) => r.name));
 const listRepos = (prefix) =>
-  JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`))
-    .map((r) => r.name)
+  allRepos()
     .filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase()) && n.toLowerCase().includes(`-${String(section).toLowerCase()}-`))
     .filter((n) => !onlyRepo || n === onlyRepo);
+
+// Cheap pre-clone triage. Cloning is the sweep's dominant cost: on a settled
+// section almost every repo is locked-and-already-graded, so the sweep paid
+// ~2s to clone each one and then graded nothing (the 2026-07-26 ADET run spent
+// 23 of its 28 minutes that way). GraphQL returns the only two things the skip
+// decisions need - the branch head and student.json - for 40 repos per request,
+// so we clone only what we are actually going to grade.
+// Strictly best-effort: any repo missing from the result falls through to the
+// original clone-first path, so an API hiccup costs speed, never accuracy.
+function peekRepos(repos) {
+  const out = new Map();
+  const field = (n, j) =>
+    `r${j}: repository(owner:${JSON.stringify(OWNER)},name:${JSON.stringify(n)})` +
+    `{defaultBranchRef{target{oid}} object(expression:"HEAD:student.json"){... on Blob{text}}}`;
+  const fetch = (slice) => {
+    const qf = `${WORK}/.peek.gql`;
+    writeFileSync(qf, `query{${slice.map(field).join("\n")}}`);
+    let raw;
+    try {
+      raw = sh(`gh api graphql -F query=@${qf}`, { maxBuffer: 1e8 });
+    } catch (e) {
+      // A deleted repo makes gh exit non-zero while still returning data for
+      // the rest of the batch, so use stdout when there is any.
+      raw = (e.stdout || "").toString().trim();
+      if (!raw) return false;
+    }
+    let data;
+    try { data = JSON.parse(raw).data; } catch { return false; }
+    if (!data) return false;
+    slice.forEach((n, j) => {
+      const r = data[`r${j}`];
+      if (!r) return; // deleted/unreadable -> clone-first path
+      out.set(n, { head: r.defaultBranchRef?.target?.oid || null, student: r.object?.text ?? null });
+    });
+    return true;
+  };
+  const BATCH = 40; // 100 aliases overruns the GraphQL timeout; 40 is comfortable
+  for (let i = 0; i < repos.length; i += BATCH) {
+    const slice = repos.slice(i, i + BATCH);
+    if (fetch(slice)) continue;
+    // One retry in halves before giving up on this slice (it then clones).
+    const mid = Math.ceil(slice.length / 2);
+    fetch(slice.slice(0, mid));
+    fetch(slice.slice(mid));
+  }
+  return out;
+}
+
+// Fingerprint of an activity's canonical tests. The skip decisions above trust
+// the stored gradebook row, which is only sound while grader/<id>/ is
+// unchanged; this notices an edited/fixed canonical test instead of silently
+// reusing a grade computed against the old one.
+const GRADER_HASHES = "gradebook/grader-hashes.json";
+const graderHash = (id) => {
+  const root = `grader/${id}`;
+  if (!existsSync(root)) return "";
+  const h = createHash("sha1");
+  const walk = (d, rel) => {
+    for (const e of readdirSync(d, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(`${d}/${e.name}`, r);
+      else { h.update(r); h.update(readFileSync(`${d}/${e.name}`)); }
+    }
+  };
+  try { walk(root, ""); } catch { return ""; }
+  return h.digest("hex").slice(0, 12);
+};
 
 function gradeVitest(dir, id) {
   cpSync(`grader/${id}`, dir, { recursive: true }); // overlay canonical tests
@@ -185,10 +259,11 @@ function gradeQuiz(dir, keyPath) {
   return { passed, total: qs.length };
 }
 
-// Read a student's identity from their student.json (if present in the clone).
-function readStudent(dir) {
+// A student's identity from the text of their student.json (same file whether
+// it came from a clone or from the pre-clone peek).
+function parseStudent(text) {
   try {
-    const s = JSON.parse(readFileSync(`${dir}/student.json`, "utf8"));
+    const s = JSON.parse(text);
     return {
       githubAccount: s.githubAccount || "",
       fullName: s.fullName || "",
@@ -201,10 +276,70 @@ function readStudent(dir) {
   }
 }
 
+// Read a student's identity from their student.json (if present in the clone).
+function readStudent(dir) {
+  try { return parseStudent(readFileSync(`${dir}/student.json`, "utf8")); }
+  catch { return parseStudent(null); }
+}
+
+// ---- canonical-test drift ------------------------------------------------
+// Compare each activity's grader/ fingerprint with the one recorded at the last
+// sweep. Unlocked activities whose tests changed re-grade this run; locked ones
+// stay frozen (a delivered grade must not move on its own) and are reported.
+const prevHashes = existsSync(GRADER_HASHES)
+  ? (() => { try { return JSON.parse(readFileSync(GRADER_HASHES, "utf8")); } catch { return {}; } })()
+  : {};
+const curHashes = { ...prevHashes };
+const staleGrader = new Set();
+for (const a of assignments) {
+  if (!a.namePrefix) continue;
+  const h = graderHash(a.id);
+  if (!h) continue;
+  curHashes[a.id] = h;
+  if (prevHashes[a.id] && prevHashes[a.id] !== h) staleGrader.add(a.id);
+}
+for (const id of staleGrader) {
+  const locked = assignments.find((a) => a.id === id)?.locked;
+  console.log(locked
+    ? `NOTE  grader/${id}/ changed since the last sweep - grades stay frozen (locked); re-grade with --force --only=${id}`
+    : `NOTE  grader/${id}/ changed since the last sweep - re-grading ${id}`);
+}
+
 // ---- sweep ---------------------------------------------------------------
 for (const a of assignments) {
-  for (const repo of listRepos(a.namePrefix)) {
+  // Manual / badge activities (manual:true, submit:"url"|"canvas") have no
+  // namePrefix and no submission repos - they are graded in Canvas SpeedGrader.
+  // Skip them so listRepos doesn't crash on an undefined prefix.
+  if (!a.namePrefix) continue;
+  const repos = listRepos(a.namePrefix);
+  const peeked = peekRepos(repos);
+  const stale = staleGrader.has(a.id);
+  for (const repo of repos) {
     const dir = `${WORK}/${repo}`;
+    // Decide what we can without cloning. Every branch here reaches the same
+    // verdict the post-clone checks below would: a frozen locked grade ignores
+    // the sha entirely, and an unlocked skip needs the stored sha to BE the
+    // branch head (anything else falls through and is re-checked after the
+    // clone against the path-filtered sha, exactly as before).
+    const pre = peeked.get(repo);
+    if (pre) {
+      if (!pre.head) { console.log(`empty ${repo} (${a.id}) - no commits yet, skipping`); continue; }
+      const key = `${repo}|${a.id}`;
+      const freshen = () => {
+        const ex = rows.find((r) => r.repo === repo && r.assignment === a.id);
+        if (ex) Object.assign(ex, parseStudent(pre.student));
+      };
+      if (a.locked && seen.has(key)) {
+        freshen();
+        console.log(`lock  ${repo} (${a.id}) - frozen (locked, already graded)`);
+        continue;
+      }
+      if (!a.locked && !force && !stale && seen.get(key) === pre.head) {
+        freshen(); // keep roster info fresh even when skipping
+        console.log(`skip  ${repo} (${a.id}) - already graded @ ${pre.head.slice(0, 7)}`);
+        continue;
+      }
+    }
     // A clone can fail transiently (network / secondary rate limit) or for a
     // genuinely broken repo. Don't let one bad clone abort the whole sweep -
     // skip it this run (it gets picked up next time), with one quick retry.
@@ -228,8 +363,9 @@ for (const a of assignments) {
       console.log(`lock  ${repo} (${a.id}) - frozen (locked, already graded)`);
       continue;
     }
-    // UNLOCKED: skip if unchanged since last grade (unless --force).
-    if (!a.locked && !force && seen.get(`${repo}|${a.id}`) === sha) {
+    // UNLOCKED: skip if unchanged since last grade (unless --force, or the
+    // canonical tests changed since that grade was computed).
+    if (!a.locked && !force && !stale && seen.get(`${repo}|${a.id}`) === sha) {
       const ex = rows.find((r) => r.repo === repo && r.assignment === a.id);
       if (ex) Object.assign(ex, stu); // keep roster info fresh even when skipping
       console.log(`skip  ${repo} (${a.id}) - already graded @ ${sha.slice(0, 7)}`);
@@ -261,6 +397,9 @@ await runNotesPass(rows, assignments, gradedThisRun, { work: WORK });
 
 // ---- write gradebook -----------------------------------------------------
 mkdirSync("gradebook", { recursive: true });
+// Fingerprints of the canonical tests these grades were computed against, so
+// the next sweep can tell "unchanged, safe to reuse" from "test was edited".
+writeFileSync(GRADER_HASHES, JSON.stringify(curHashes, null, 2) + "\n");
 writeFileSync(
   CSV,
   HEADER + "\n" +

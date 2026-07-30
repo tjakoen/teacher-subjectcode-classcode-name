@@ -45,6 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Install only the toolchains this class's activities actually use, and
+      # delete the rest of these steps: every unused SDK install is paid on
+      # every sweep. If you grade Flutter, drop setup-dart (flutter-action
+      # bundles Dart) and add `cache: true` so the SDK is not re-downloaded.
       - uses: actions/setup-node@v4
         with:
           node-version: "20"

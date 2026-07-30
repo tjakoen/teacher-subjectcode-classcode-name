@@ -5,6 +5,10 @@ The grade sweep writes the authoritative record here:
 - `GRADEBOOK.md` - human-readable table you read right in the repo.
 - `grades.csv` - machine record; the export workflow turns it into the
   Canvas-import CSV.
+- `grader-hashes.json` - a fingerprint per activity of the canonical tests its
+  grades were computed against. The sweep reuses a stored grade only while this
+  matches, so an edited test is noticed instead of silently skipped. Written by
+  the sweep; never hand-edit it.
 
 Nothing official is ever read back from a student repo. The receipts pushed into
 student repos are display-only copies. (Wired up in build step 2.)
