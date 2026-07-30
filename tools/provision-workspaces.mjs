@@ -240,7 +240,15 @@ const pushWorkspace = (repo, sj) => {
   execSync(`( cd ${tpl} && tar --exclude=./.git --exclude=./student.json -cf - . ) | ( cd ${dir} && tar -xf - )`, { stdio: "ignore" });
   writeFileSync(`${dir}/student.json`, JSON.stringify(sj, null, 2) + "\n");
   execSync(`git -C ${dir} add -A`, { stdio: "ignore" });
-  trySh(`git -C ${dir} commit -q -m ":seedling: Provision workspace: template scaffold + student.json"`);
+  // Commit as course-bot with an EXPLICIT identity. An Actions runner has no git
+  // user configured, so a bare `git commit` fails there; this used to be wrapped
+  // in trySh, which swallowed that failure and let the run die one line later on
+  // push with the unrelated-looking "src refspec HEAD does not match any". Be
+  // loud instead, and skip the commit only when there is genuinely nothing new.
+  const bot = `-c user.name=course-bot -c user.email=course-bot@users.noreply.github.com`;
+  if (sh(`git -C ${dir} status --porcelain`)) {
+    sh(`git -C ${dir} ${bot} commit -q -m ":seedling: Provision workspace: template scaffold + student.json"`);
+  }
   sh(`git -C ${dir} push -q origin HEAD:main`);
 };
 
@@ -263,7 +271,21 @@ sh(`gh auth setup-git`);
 let done = 0;
 for (const c of plan.create) {
   console.log(`create ${c.name} ...`);
-  trySh(`gh repo create ${OWNER}/${c.name} --private -d "Course workspace"`);
+  // Creating the repo must succeed. This used to be trySh-wrapped, so a token
+  // without repo-create rights on the org fell through to cloning a repo that
+  // was never created, and the run failed with "Could not resolve to a
+  // Repository" - a message pointing nowhere near the real cause.
+  try {
+    sh(`gh repo create ${OWNER}/${c.name} --private -d "Course workspace"`);
+  } catch (e) {
+    const msg = String(e.stderr || e.stdout || e.message || "").trim();
+    if (!/already exists/i.test(msg)) {
+      console.error(`\nFAILED to create ${OWNER}/${c.name}: ${msg}`);
+      console.error(`The token needs repo-create rights on ${OWNER} (fine-grained PAT: Administration write). Nothing was scaffolded.`);
+      process.exit(1);
+    }
+    console.log(`  ${c.name} already exists - scaffolding into it`);
+  }
   pushWorkspace(c.name, c.sj);
   addCollaborator(c.name, c.sj, c.handle); done++;
 }
