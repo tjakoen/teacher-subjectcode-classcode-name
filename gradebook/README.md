@@ -51,6 +51,12 @@ How it behaves:
     `RUBRIC.md`, not here.
   - `"autoPoints": <n>` - legacy split (export only the objective `n`, rest a
     manual top-up); superseded by `totalPoints` + `manual`, still honoured.
+  - `"canvasName": "<exact live name>"` - adopt a Canvas assignment whose name
+    carries no id token (created by hand, e.g. "Final Project Proposal
+    Submission"). Without it the Canvas tools cannot map the assignment, and
+    the sync would create a duplicate next to the live one. Matching ignores
+    case, surrounding space, and the trailing `(12345)` in a gradebook CSV
+    header; exact otherwise, so "Prelim" and "Prelims" stay distinct.
 
 ### AI feedback flags
 
