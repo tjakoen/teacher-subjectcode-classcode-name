@@ -15,7 +15,7 @@
 // Usage: node tools/canvas-pull-points.mjs [--course=<id>] [--execute]
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { tokenToId } from "./lib/gradebook.mjs";
+import { makeIdResolver, loadPolicy } from "./lib/gradebook.mjs";
 
 const arg = (n, d = null) => {
   const a = process.argv.find((x) => x.startsWith(`--${n}=`));
@@ -65,9 +65,10 @@ const lineFor = (obj) => {
 
 // ---- pull + plan ---------------------------------------------------------
 console.log(`canvas-pull-points: course ${courseId} on ${BASE} (${execute ? "EXECUTE" : "dry run"})`);
+const resolveId = makeIdResolver(loadPolicy(PATH));
 const canvasPts = new Map(); // ourId -> points_possible
 for (const a of await apiGetAll(`/courses/${courseId}/assignments`)) {
-  const ourId = tokenToId(a.name);
+  const ourId = resolveId(a.name);
   if (ourId && a.points_possible != null) canvasPts.set(ourId, a.points_possible);
 }
 

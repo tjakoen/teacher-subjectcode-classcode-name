@@ -30,7 +30,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import {
-  parseCsv, csvField, tokenToId, loadPolicy, loadGradebook, consolidate,
+  parseCsv, csvField, makeIdResolver, loadPolicy, loadGradebook, consolidate,
   matchGroups, pointsFor, normNum, normEmail,
 } from "./lib/gradebook.mjs";
 
@@ -51,6 +51,7 @@ if (!canvasPath) {
 // ---- our gradebook -------------------------------------------------------
 const { rows, section } = loadGradebook("gradebook/grades.csv", sectionArg);
 const policy = loadPolicy();
+const resolveId = makeIdResolver(policy);
 const groups = consolidate(rows, section);
 
 // ---- read the Canvas export ----------------------------------------------
@@ -72,7 +73,7 @@ const unmappedHeaders = [];
 cHeader.forEach((h, idx) => {
   const m = String(h).match(/\((\d+)\)\s*$/);
   if (!m) return;                                  // not a gradable assignment column
-  const ourId = tokenToId(h);
+  const ourId = resolveId(h);
   if (!ourId) { unmappedHeaders.push(h.trim()); return; }
   const pol = policy.get(ourId) || {};
   // manual = hand-graded in Canvas; aiGraded = held for review-then-publish.

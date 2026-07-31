@@ -24,7 +24,7 @@
 
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { parseCsv, tokenToId, pointsFor, normNum, loadPolicy } from "./lib/gradebook.mjs";
+import { parseCsv, makeIdResolver, pointsFor, normNum, loadPolicy } from "./lib/gradebook.mjs";
 
 // ---- args / env ----------------------------------------------------------
 const arg = (name, def = null) => {
@@ -58,6 +58,7 @@ const F = { section, identity: [], gradedNotSubmitted: [], submittedNotGraded: [
 
 // ---- our gradebook: (num|activity) -> grade ------------------------------
 const policy = loadPolicy("grader/assignments.json");
+const resolveId = makeIdResolver(policy);
 const gb = new Map();           // `${num}|${act}` -> { passed, total, aiScore, repo }
 const numActs = new Map();      // num -> Set(activity)
 if (existsSync("gradebook/grades.csv")) {
@@ -84,7 +85,7 @@ for (const [num, u] of numToUser) if (!numActs.has(num)) F.noWork.push({ num, na
 
 // ---- map Canvas assignments -> our activities ----------------------------
 const assignments = await canvasGet(`/courses/${courseId}/assignments`);
-const mapped = assignments.map((a) => ({ a, ourId: tokenToId(a.name) })).filter((x) => x.ourId && policy.has(x.ourId));
+const mapped = assignments.map((a) => ({ a, ourId: resolveId(a.name) })).filter((x) => x.ourId && policy.has(x.ourId));
 const mappedActs = new Set(mapped.map((x) => x.ourId));
 let gradedMapped = 0, gradedWithCanvas = 0;   // coverage over graded rows on mapped activities
 

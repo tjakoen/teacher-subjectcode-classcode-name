@@ -6,7 +6,7 @@
 // upserts a gradebook row so GRADEBOOK.md and the local record stay complete.
 //
 // It is the general form of canvas-pull-quiz-grades: it resolves the Canvas
-// assignment directly (by name -> our id via tokenToId), so it works for ANY
+// assignment directly (by name -> our id, honoring a `canvasName` alias), so it works for ANY
 // activity, not just quizzes.
 //
 // READ-ONLY BY DEFAULT: prints the planned changes and writes nothing until
@@ -20,7 +20,7 @@
 // Usage: node tools/canvas-pull-grades.mjs <activityId> [--course=<id>] [--section=<code>] [--execute]
 
 import fs from "node:fs";
-import { parseCsvLine, csvField, normNum, normEmail, tokenToId } from "./lib/gradebook.mjs";
+import { parseCsvLine, csvField, normNum, normEmail, makeIdResolver, loadPolicy } from "./lib/gradebook.mjs";
 
 const CSV = "gradebook/grades.csv";
 
@@ -120,7 +120,8 @@ if (process.argv[1] && process.argv[1].endsWith("canvas-pull-grades.mjs")) {
 
   (async () => {
     const assignments = await apiGetAll(`/courses/${courseId}/assignments`);
-    const assignment = assignments.find((a) => tokenToId(a.name) === activityId);
+    const resolveId = makeIdResolver(loadPolicy("grader/assignments.json"));
+    const assignment = assignments.find((a) => resolveId(a.name) === activityId);
     if (!assignment) { console.error(`no Canvas assignment whose name maps to ${activityId} in course ${courseId}`); process.exit(1); }
     const pp = assignment.points_possible ?? 0;
     console.log(`Pull "${assignment.name}" (assignment ${assignment.id}, ${pp} pts) -> ${CSV}  (${execute ? "EXECUTE" : "DRY RUN"})`);

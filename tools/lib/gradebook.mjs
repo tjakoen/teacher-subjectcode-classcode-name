@@ -65,6 +65,23 @@ export const tokenToId = (label) => {
   const lc = s.toLowerCase();
   return (lc === "prelim" || lc === "midterm") ? lc : null;
 };
+// Canvas name -> our id, with an escape hatch for assignments whose live Canvas
+// name carries no readable id ("Final Project Proposal Submission"). An activity
+// may declare `canvasName` in assignments.json; that exact name (case- and
+// space-insensitive) wins, and anything else falls through to tokenToId. Use it
+// to ADOPT an assignment that already exists in Canvas, instead of renaming it
+// under students who have already submitted. Build one per tool from its policy.
+// A Canvas gradebook CSV header is "<assignment name> (<canvas id>)", so the
+// trailing id is dropped before matching - an assignment name never ends that way.
+const aliasKey = (label) =>
+  String(label ?? "").replace(/\s*\(\d+\)\s*$/, "").trim().toLowerCase();
+export const makeIdResolver = (policy) => {
+  const alias = new Map();
+  for (const [id, a] of policy || []) {
+    if (a && a.canvasName) alias.set(aliasKey(a.canvasName), id);
+  }
+  return (label) => alias.get(aliasKey(label)) ?? tokenToId(label);
+};
 // The student's chosen suffix in a repo name, e.g. m1a1-2125-Catap -> "catap",
 // student-6ADET-2125-skpriniel -> "skpriniel". Bridges a blank-identity row to a
 // sibling that has identity, via the github-account namespace.
@@ -118,6 +135,8 @@ export function loadPolicy(path = "grader/assignments.json") {
         publish: !!a.publish,
         // Canvas-authoring metadata (grading-neutral; see the block above).
         type: a.type || null, submit: a.submit || null, content: a.content || null, title: a.title || null,
+        // Exact live Canvas assignment name to adopt, when it carries no id token.
+        canvasName: a.canvasName || null,
       });
     }
   } catch { /* no assignments.json - treat all as fully auto */ }

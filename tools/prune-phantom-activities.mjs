@@ -10,7 +10,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { tokenToId, parseCsv } from "./lib/gradebook.mjs";
+import { makeIdResolver, loadPolicy, parseCsv } from "./lib/gradebook.mjs";
 
 const arg = (name, def = null) => {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
@@ -42,7 +42,8 @@ async function canvasGet(path) {
 const path = "grader/assignments.json";
 const acts = JSON.parse(readFileSync(path, "utf8"));
 const canvas = await canvasGet(`/courses/${courseId}/assignments`);
-const cIds = new Set(canvas.map((a) => tokenToId(a.name)).filter(Boolean));
+const resolveId = makeIdResolver(loadPolicy(path));
+const cIds = new Set(canvas.map((a) => resolveId(a.name)).filter(Boolean));
 const gc = {};
 if (existsSync("gradebook/grades.csv")) {
   const rows = parseCsv(readFileSync("gradebook/grades.csv", "utf8"));

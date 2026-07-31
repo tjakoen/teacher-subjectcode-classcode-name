@@ -28,7 +28,7 @@
 import { writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
-  tokenToId, loadPolicy, loadGradebook, consolidate, matchGroups, pointsFor,
+  makeIdResolver, loadPolicy, loadGradebook, consolidate, matchGroups, pointsFor,
 } from "./lib/gradebook.mjs";
 
 // ---- args / env ----------------------------------------------------------
@@ -150,6 +150,7 @@ const apiGetAll = async (path) => {
 // ---- our gradebook -------------------------------------------------------
 const { rows, section } = loadGradebook("gradebook/grades.csv", sectionArg);
 const policy = loadPolicy();
+const resolveId = makeIdResolver(policy);
 const groups = consolidate(rows, section);
 
 // ---- pull roster + assignments live --------------------------------------
@@ -192,7 +193,7 @@ const skippedManual = [];
 const heldForReview = [];     // AI-graded: proposed grade awaits your review
 const pointsMismatch = [];    // declared totalPoints != Canvas points_possible
 for (const a of assignments) {
-  const ourId = tokenToId(a.name);
+  const ourId = resolveId(a.name);
   if (!ourId) continue;
   const pol = policy.get(ourId) || {};
   // Reconcile what assignments.json says the activity is worth against Canvas's

@@ -14,7 +14,8 @@
 //
 // It is deliberately conservative so it can be re-run safely:
 //   * It only ever touches Canvas assignments whose name maps to one of our
-//     activity ids (tokenToId) - your other Canvas assignments are left alone.
+//     activity ids (by name token, or an explicit `canvasName` alias) - your
+//     other Canvas assignments are left alone.
 //   * CREATE builds the full standard shell (name, description, points,
 //     submission type) for an activity Canvas does not have yet.
 //   * UPDATE of an EXISTING assignment reconciles Points Possible only (and only
@@ -40,7 +41,7 @@
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { tokenToId } from "./lib/gradebook.mjs";
+import { makeIdResolver, loadPolicy } from "./lib/gradebook.mjs";
 
 // ---- args / env ----------------------------------------------------------
 const arg = (name, def = null) => {
@@ -162,7 +163,10 @@ const activities = JSON.parse(readFileSync("grader/assignments.json", "utf8"))
   .filter((a) => !onlyId || a.id === onlyId);
 const canvas = await apiGetAll(`/courses/${courseId}/assignments`);
 const byId = new Map();
-for (const c of canvas) { const id = tokenToId(c.name); if (id && !byId.has(id)) byId.set(id, c); }
+// Resolve against the FULL policy, not the --only filter: an alias declared on
+// any activity must still be honored when adopting live Canvas assignments.
+const resolveId = makeIdResolver(loadPolicy("grader/assignments.json"));
+for (const c of canvas) { const id = resolveId(c.name); if (id && !byId.has(id)) byId.set(id, c); }
 
 console.log(`canvas-sync: course ${courseId} on ${BASE} (${execute ? "EXECUTE" : "dry run"})`);
 
