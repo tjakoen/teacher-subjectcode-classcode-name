@@ -24,6 +24,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       SECTION: "CLASSCODE"                                  # LOCKED to one class
       ATTENDANCE_HMAC_SECRET: ${{ secrets.ATTENDANCE_HMAC_SECRET }}

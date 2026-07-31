@@ -24,6 +24,7 @@ concurrency:
 jobs:
   prune:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       GH_TOKEN: ${{ secrets.ORG_PAT }}             # read: repo-existence checks across the org
       GRADE_OWNER: ${{ github.repository_owner }}

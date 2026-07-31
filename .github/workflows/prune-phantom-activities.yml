@@ -24,6 +24,7 @@ concurrency:
 jobs:
   prune:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
       CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
