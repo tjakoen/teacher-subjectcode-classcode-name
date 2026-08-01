@@ -92,7 +92,10 @@ export const repoStem = (repo, section) => {
   return tail.toLowerCase();
 };
 
-const isAssignmentId = (id) => /^(m\d+a\d+|q\d+)$/i.test(String(id));
+// Must stay in step with tokenToId below, which already resolves an exact
+// "prelim"/"midterm" to an id. When this was stricter than that, consolidate()
+// silently dropped every prelim row, so canvas-push could never see one.
+const isAssignmentId = (id) => /^(m\d+a\d+|q\d+|prelim|midterm)$/i.test(String(id));
 
 // ---- assignment policy ---------------------------------------------------
 // manual:          entirely hand-graded -> never sent to Canvas. AI-graded
