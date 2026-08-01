@@ -17,7 +17,7 @@
 // and the "story" cannot drift.
 
 import { execSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 
 const sh = (cmd) => execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const quiet = (cmd) => execSync(cmd, { stdio: "ignore" });
@@ -270,10 +270,22 @@ function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
 // a student out of delivery until cleared).
 export async function runNotesPass(rows, assignments, gradedThisRun, ctx = {}) {
   const byId = new Map(assignments.map((a) => [a.id, a]));
-  const todo = rows.filter((r) => {
+  const work = ctx.work || ".grade-work";
+  const candidates = rows.filter((r) => {
     if (!warrantsFeedback(r, byId.get(r.assignment))) return false;
     return gradedThisRun.has(`${r.repo}|${r.assignment}`) || !r.notes; // regraded, or still missing a note
   });
+  // writeNotesInput reads the CLONE for the student's source, so a row that was
+  // skipped this run (sha unchanged, or a --repo/--only run that graded someone
+  // else) has no clone and would silently produce an input whose "Student
+  // source" section is EMPTY - and a feedback draft written from that judges no
+  // code at all. Only write for rows we actually have a working tree for.
+  const todo = candidates.filter((r) => existsSync(`${work}/${r.repo}`));
+  const noClone = candidates.filter((r) => !existsSync(`${work}/${r.repo}`));
+  if (noClone.length) {
+    console.log(`\nai feedback: ${noClone.length} row(s) still need a note but were not cloned this run - NOT writing a sourceless input for them.`);
+    console.log(`  re-run with --force --only=<id> so they are cloned: ${[...new Set(noClone.map((r) => r.assignment))].sort().join(", ")}`);
+  }
   if (!todo.length) return;
   console.log(`\nai feedback: writing ${todo.length} input file(s) to gradebook/notes-input/ (generate notes with the grader-ui feedback prompt)...`);
   for (const r of todo) {
