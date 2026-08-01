@@ -115,7 +115,13 @@ const MAX_IMAGES = 2;
 // locally onto row.pages (pass previewDir), or reuse the Playwright shots a
 // project CI publishes to a `previews` branch (`"previews": "branch"`).
 function fetchBranchPreviews(clone) {
-  try { quiet(`git -C ${clone} fetch -q origin previews --depth=1`); } catch { return []; }
+  // The sweep clones shallow AND single-branch (`gh repo clone -- --depth=1`), so
+  // remote.origin.fetch only maps the default branch. A bare `fetch origin previews`
+  // then succeeds but lands in FETCH_HEAD without ever creating
+  // refs/remotes/origin/previews, and the ls-tree below dies on "not a valid object
+  // name" - silently costing every design submission its screenshots. Name the
+  // destination ref explicitly so the remote-tracking ref actually exists.
+  try { quiet(`git -C ${clone} fetch -q origin --depth=1 previews:refs/remotes/origin/previews`); } catch { return []; }
   let listing = "";
   try { listing = sh(`git -C ${clone} ls-tree -r --name-only origin/previews`); } catch { return []; }
   const pngs = listing.split("\n").filter((f) => /^submission\/.+\.png$/i.test(f));
