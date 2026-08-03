@@ -19,7 +19,13 @@ import { execSync } from "node:child_process";
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync, readdirSync,
 } from "node:fs";
-import { loadPolicy } from "./lib/gradebook.mjs";
+import { loadPolicy, authorshipNotice } from "./lib/gradebook.mjs";
+
+// The teacher-side note behind a delivered grade. Only its authorship estimate is
+// read here; the student prose itself comes from the base64 `notes` column.
+const readNoteFile = (activity, repo) => {
+  try { return readFileSync(`gradebook/notes/${activity}/${repo}.md`, "utf8"); } catch { return ""; }
+};
 
 const section = process.argv[2];
 const execute = process.argv.includes("--execute");
@@ -150,12 +156,18 @@ function pushWorkspaceGrades(ws, studentRows) {
     }
   }
   // Consolidated, student-facing feedback (no scores / no tooling attribution).
+  // The instructor half of gradebook/notes/<id>/<repo>.md stays teacher-side, but
+  // a medium/high authorship estimate adds one fixed, non-accusatory line here
+  // (same wording the Canvas comment carries) so the student knows it was noticed.
   const fbRows = sorted.filter((r) => r.notes);
   if (fbRows.length) {
     writeFileSync(`${dir}/FEEDBACK.md`, [
       "# Feedback", "",
       "_Notes on your submission to help you improve. Not a grade; see GRADES.md for scores._", "",
-      ...fbRows.flatMap((r) => [`## ${r.assignment}`, "", r.notes, ""]),
+      ...fbRows.flatMap((r) => {
+        const notice = authorshipNotice(readNoteFile(r.assignment, r.repo));
+        return [`## ${r.assignment}`, "", r.notes, "", ...(notice ? [notice, ""] : [])];
+      }),
     ].join("\n"));
   } else { rmSync(`${dir}/FEEDBACK.md`, { force: true }); }
   const md = [

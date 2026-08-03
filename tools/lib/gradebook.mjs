@@ -260,6 +260,21 @@ export function matchGroups(groups, students, { sisOf, loginOf, nameOf = () => "
   return { pairs, unmatched, groupOf };
 }
 
+// ---- authorship notice ---------------------------------------------------
+// The instructor half of an AI feedback note ends with a private
+// `AI-authored likelihood: low|medium|high` estimate. That line itself is never
+// shown to a student, but from 2026-08-03 the instructor wants a student on the
+// medium or high end told, plainly, that authorship is being watched: no score
+// change, no penalty, no mention that a model produced the signal. Same single
+// line for both tiers, deliberately - a "medium" student should not be able to
+// infer they were rated lower risk than a "high" one.
+export const AUTHORSHIP_NOTICE =
+  "Note on authorship: parts of this submission read as more advanced than the work and pace I have seen from you so far. No penalty has been applied. Be ready to walk me through your code and explain your choices if I ask.";
+
+// The note text (whole file, both halves) -> the notice, or "" for low/absent.
+export const authorshipNotice = (note) =>
+  /ai-authored likelihood:\s*(?:high|medium)\b/i.test(String(note ?? "")) ? AUTHORSHIP_NOTICE : "";
+
 // passed/total -> Canvas points. Returns null when nothing should be written
 // (no grade, or a 0/0 unbuildable submission). Subjective activities scale to
 // their objective portion only; everything else scales to Points Possible.

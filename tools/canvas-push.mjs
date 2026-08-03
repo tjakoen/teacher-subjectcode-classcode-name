@@ -29,6 +29,7 @@ import { writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   makeIdResolver, loadPolicy, loadGradebook, consolidate, matchGroups, pointsFor,
+  authorshipNotice,
 } from "./lib/gradebook.mjs";
 
 // ---- args / env ----------------------------------------------------------
@@ -82,7 +83,10 @@ const buildComment = (t, score, pts) => {
 // comment carries a rubric breakdown of how it was reached plus the student
 // feedback prose. It deliberately EXCLUDES the instructor-only header, the
 // proposed-total restatement, and the AI-authored likelihood line, and never
-// mentions AI - the same wall the published FEEDBACK.md keeps.
+// mentions AI - the same wall the published FEEDBACK.md keeps. The one thing
+// that does cross that wall is `authorshipNotice`: a medium/high likelihood adds
+// a fixed, non-accusatory line telling the student authorship is being watched.
+// The estimate itself, its tier, and its reasoning still never leave the note.
 const readNote = (ourId, repo) => {
   try { return readFileSync(`gradebook/notes/${ourId}/${repo}.md`, "utf8"); } catch { return ""; }
 };
@@ -94,24 +98,29 @@ const parseAiNote = (note) => {
   const sl = head.split("\n");
   while (sl.length && (/^#/.test(sl[0].trim()) || /^_.*_$/.test(sl[0].trim()) || sl[0].trim() === "")) sl.shift();
   const student = sl.join("\n").trim();
+  // WHITELIST, not blacklist. This used to drop three known lines and pass
+  // everything else through, which sent free-form reviewer prose ("your prior
+  // override was...", "the sourceless draft...", "rubric-faithful total would be
+  // 64") straight to the student. The comment is only ever meant to be the
+  // rubric breakdown, so keep exactly that shape: per-criterion bullets and the
+  // half/subtotal headers. Anything else in the instructor half stays private by
+  // default, which is the safe direction to fail in.
+  const KEEP = /^(?:[-*]\s+\S)|^(?:automated|design|objective|rubric|manual)\b[^.]*:\s*$|^(?:automated|design|objective|rubric|manual)\s+subtotal\b/i;
   const breakdown = instr.split("\n")
-    .filter((ln) => {
-      const t = ln.trim();
-      if (/^\*+\s*for the instructor/i.test(t)) return false;
-      if (/ai-authored likelihood/i.test(t)) return false;
-      if (/^proposed total/i.test(t)) return false;
-      return true;
-    })
+    .filter((ln) => KEEP.test(ln.trim()))
     .join("\n").replace(/^\s+|\s+$/g, "");
   return { student, breakdown };
 };
 const buildAiComment = (t, score, pts) => {
-  const { student, breakdown } = parseAiNote(readNote(t.ourId, score.repo));
+  const note = readNote(t.ourId, score.repo);
+  const { student, breakdown } = parseAiNote(note);
+  const notice = authorshipNotice(note);
   const sha7 = (score.sha || "").slice(0, 7);
   const url = OWNER && score.repo && score.sha ? `https://github.com/${OWNER}/${score.repo}/commit/${score.sha}` : "";
   const lines = [`Grade: ${pts}/${t.pointsPossible ?? "?"}`];
   if (breakdown) lines.push("", "How this grade was reached:", breakdown);
   if (student) lines.push("", "Feedback:", student);
+  if (notice) lines.push("", notice);
   lines.push("", `- Submission: ${score.repo}${sha7 ? `@${sha7}` : ""}${score.late ? "  (submitted late)" : ""}`);
   if (url) lines.push(`- Reference: ${url}`);
   return lines.join("\n");
