@@ -42,8 +42,11 @@ const quiet = (cmd, opts = {}) => execSync(cmd, { stdio: "ignore", timeout: 600_
 // In Actions, set GRADE_OWNER to the org (github.repository_owner); locally it
 // falls back to the authenticated gh user.
 const OWNER = process.env.GRADE_OWNER || sh("gh api user -q .login");
-const assignments = JSON.parse(readFileSync("grader/assignments.json", "utf8"))
-  .filter((a) => !only || a.id === only);
+// Keep the UNFILTERED policy around: the unmatched-submissions report at the end
+// has to know every activity this section runs, not just the one --only selected,
+// or a targeted run reports every other activity's submissions as orphans.
+const allAssignments = JSON.parse(readFileSync("grader/assignments.json", "utf8"));
+const assignments = allAssignments.filter((a) => !only || a.id === only);
 
 const WORK = ".grade-work";
 rmSync(WORK, { recursive: true, force: true });
@@ -132,13 +135,11 @@ const matchesActivity = (name, prefix) => {
   const at = c.indexOf(`-${p}`);          // "<handle>-m5a3-2240-..."
   return at > 0 && /^[a-z0-9.-]+$/.test(c.slice(0, at));
 };
-const claimed = new Set();                 // every repo some activity took this run
-const listRepos = (prefix) => {
-  const hit = allRepos().filter((n) =>
-    matchesActivity(n, prefix) && canon(n).includes(`-${String(section).toLowerCase()}-`));
-  for (const n of hit) claimed.add(n);     // record before --repo narrows the run
-  return hit.filter((n) => !onlyRepo || n === onlyRepo);
-};
+const inSection = (name) => canon(name).includes(`-${String(section).toLowerCase()}-`);
+const listRepos = (prefix) =>
+  allRepos()
+    .filter((n) => matchesActivity(n, prefix) && inSection(n))
+    .filter((n) => !onlyRepo || n === onlyRepo);
 
 // Cheap pre-clone triage. Cloning is the sweep's dominant cost: on a settled
 // section almost every repo is locked-and-already-graded, so the sweep paid
@@ -473,13 +474,18 @@ writeFileSync("gradebook/GRADEBOOK.md", md);
 // naming a DIFFERENT four-digit section is deliberately not reported here - it
 // is presumed to be a sibling section's, and cross-section orphans surface in
 // tools/org-audit.mjs instead.
+//
+// This is computed from the FULL policy, never from what this run happened to
+// grade, so `--only` and `--repo` produce the same report as a whole sweep.
 {
   const ACTIVITY = /(?:^|-)(m\d+a\d+|prelim|midterm|q\d+)(?:-|$)/;
   const sec = String(section).toLowerCase();
+  const claimedByAny = (name) => allAssignments.some(
+    (a) => a.namePrefix && matchesActivity(name, a.namePrefix) && inSection(name));
   const unmatched = [];
   for (const name of allRepos()) {
     const c = canon(name);
-    if (INFRA.test(c) || claimed.has(name) || !ACTIVITY.test(c)) continue;
+    if (INFRA.test(c) || claimedByAny(name) || !ACTIVITY.test(c)) continue;
     if (c.includes(`-${sec}-`)) unmatched.push([name, "names this section but matches no activity id"]);
     else if (!/-\d{4}(-|$)/.test(c)) unmatched.push([name, "has an activity id but no section in the name"]);
   }
