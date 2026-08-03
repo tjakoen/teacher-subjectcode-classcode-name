@@ -16,6 +16,7 @@
 // Usage:
 //   node tools/canvas-push.mjs [--course=<id>] [--section=<code>] [--check]
 //                              [--execute] [--comment] [--report=<path>]
+//                              [--only=<id>[,<id>]]
 //   (course defaults to the CANVAS_COURSE_ID env baked into the workflow)
 //
 // Behaviour vs grader/assignments.json:
@@ -43,6 +44,7 @@ const flag = (name) => process.argv.includes(`--${name}`);
 const courseId = arg("course") || process.env.CANVAS_COURSE_ID || "";
 const sectionArg = arg("section");
 const reportPath = arg("report", "gradebook/canvas-push-report.md");
+const only = (arg("only", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const checkOnly = flag("check");
 const execute = flag("execute");
 const withComment = flag("comment");
@@ -163,7 +165,7 @@ const resolveId = makeIdResolver(policy);
 const groups = consolidate(rows, section);
 
 // ---- pull roster + assignments live --------------------------------------
-console.log(`canvas-push: course ${courseId} on ${BASE} (${checkOnly ? "check only" : execute ? "EXECUTE" : "dry run"})`);
+console.log(`canvas-push: course ${courseId} on ${BASE} (${checkOnly ? "check only" : execute ? "EXECUTE" : "dry run"})${only.length ? ` [only: ${only.join(", ")}]` : ""}`);
 const students = await apiGetAll(`/courses/${courseId}/users?enrollment_type[]=student&include[]=enrollments&include[]=email`);
 // Canvas exposes sis_user_id / login_id only when the token has SIS-data rights;
 // fall back to email so matching still works without that permission.
@@ -204,6 +206,11 @@ const pointsMismatch = [];    // declared totalPoints != Canvas points_possible
 for (const a of assignments) {
   const ourId = resolveId(a.name);
   if (!ourId) continue;
+  // --only=<id>[,<id>] narrows a push to the activity you are actually
+  // delivering. Without it a push re-sends every activity in the section, and
+  // any comment whose text has drifted since it was posted stacks a SECOND
+  // comment rather than being recognised as a duplicate.
+  if (only.length && !only.includes(ourId)) continue;
   const pol = policy.get(ourId) || {};
   // Reconcile what assignments.json says the activity is worth against Canvas's
   // live value (covers held/manual activities too, before they are skipped).
