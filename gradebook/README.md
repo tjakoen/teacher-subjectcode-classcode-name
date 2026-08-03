@@ -9,6 +9,15 @@ The grade sweep writes the authoritative record here:
   grades were computed against. The sweep reuses a stored grade only while this
   matches, so an edited test is noticed instead of silently skipped. Written by
   the sweep; never hand-edit it.
+- `UNMATCHED.md` - repos that look like submissions for this section but that no
+  activity claimed, so they were never cloned and never graded. **Read this after
+  every sweep.** Nothing else name-checks a submission repo (`audit-repo-names`
+  only covers `student-`/`teacher-`), so before this file a misnamed submission
+  was invisible for the whole term. The sweep already tolerates underscores in
+  place of hyphens and a handle prepended to the name; what lands here is a wrong
+  or missing section, which cannot be guessed without risking filing a grade under
+  the wrong class. Fix with `gh repo rename` and re-run the sweep - GitHub
+  redirects the old URL, so the student's existing clone keeps working.
 
 Nothing official is ever read back from a student repo. The receipts pushed into
 student repos are display-only copies. (Wired up in build step 2.)

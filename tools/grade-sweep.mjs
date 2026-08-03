@@ -111,10 +111,34 @@ let allReposCache = null;
 const allRepos = () => (allReposCache ??=
   JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`)) // limit > org repo count, else repos get silently dropped
     .map((r) => r.name));
-const listRepos = (prefix) =>
-  allRepos()
-    .filter((n) => n.toLowerCase().startsWith(prefix.toLowerCase()) && n.toLowerCase().includes(`-${String(section).toLowerCase()}-`))
-    .filter((n) => !onlyRepo || n === onlyRepo);
+// Repo names drift in ways that silently cost a student their whole grade,
+// because nothing else in the platform name-checks a SUBMISSION repo
+// (audit-repo-names.mjs only looks at student-/teacher-). Two drifts are
+// unambiguous and are normalized here rather than left ungraded forever:
+// underscores in place of hyphens (`m4a2_2134_Barles`) and the student's handle
+// prepended (`Le1fux-m5a3-2240-Le1fux`). The SECTION token still has to match
+// exactly - guessing a section would file a grade under the wrong class, which
+// is worse than not grading it. Everything unclaimed lands in UNMATCHED.md.
+const canon = (n) => n.toLowerCase().replace(/_/g, "-");
+// Never treat an infrastructure repo as a submission. This matters because the
+// handle-strip rule below would otherwise claim things like
+// `teacher-<org>-<section>-prelim-grading-backfill` as a `prelim-` submission
+// and try to grade the teacher repo.
+const INFRA = /^(student|teacher)-|-solution$|yourname|classcode|live-demo/;
+const matchesActivity = (name, prefix) => {
+  const c = canon(name), p = prefix.toLowerCase();
+  if (INFRA.test(c)) return false;
+  if (c.startsWith(p)) return true;
+  const at = c.indexOf(`-${p}`);          // "<handle>-m5a3-2240-..."
+  return at > 0 && /^[a-z0-9.-]+$/.test(c.slice(0, at));
+};
+const claimed = new Set();                 // every repo some activity took this run
+const listRepos = (prefix) => {
+  const hit = allRepos().filter((n) =>
+    matchesActivity(n, prefix) && canon(n).includes(`-${String(section).toLowerCase()}-`));
+  for (const n of hit) claimed.add(n);     // record before --repo narrows the run
+  return hit.filter((n) => !onlyRepo || n === onlyRepo);
+};
 
 // Cheap pre-clone triage. Cloning is the sweep's dominant cost: on a settled
 // section almost every repo is locked-and-already-graded, so the sweep paid
@@ -440,6 +464,39 @@ const md = [
   "",
 ].join("\n");
 writeFileSync("gradebook/GRADEBOOK.md", md);
+// ---- unmatched submissions ----------------------------------------------
+// A submission repo whose name no activity claimed is invisible: it is never
+// cloned, never graded, and nothing warns you. Report it every sweep so a
+// misnamed repo costs a day instead of a term. Two buckets are reported: repos
+// carrying THIS section's token that no activity took, and repos carrying an
+// activity id but no section token at all (those belong to nobody). A repo
+// naming a DIFFERENT four-digit section is deliberately not reported here - it
+// is presumed to be a sibling section's, and cross-section orphans surface in
+// tools/org-audit.mjs instead.
+{
+  const ACTIVITY = /(?:^|-)(m\d+a\d+|prelim|midterm|q\d+)(?:-|$)/;
+  const sec = String(section).toLowerCase();
+  const unmatched = [];
+  for (const name of allRepos()) {
+    const c = canon(name);
+    if (INFRA.test(c) || claimed.has(name) || !ACTIVITY.test(c)) continue;
+    if (c.includes(`-${sec}-`)) unmatched.push([name, "names this section but matches no activity id"]);
+    else if (!/-\d{4}(-|$)/.test(c)) unmatched.push([name, "has an activity id but no section in the name"]);
+  }
+  const um = [
+    `# Unmatched submission repos - section ${section}`,
+    "",
+    unmatched.length
+      ? `**${unmatched.length} repo(s) look like submissions but were NOT graded.** Rename them to \`<id>-${section}-<handle>\` (\`gh repo rename\`), then re-run the sweep. GitHub redirects the old URL, so a student's existing clone keeps working.`
+      : "No unmatched submission repos. Every repo naming this section was claimed by an activity.",
+    "",
+    ...(unmatched.length ? ["| Repo | Why it was skipped |", "| --- | --- |",
+      ...unmatched.map(([n, w]) => `| \`${n}\` | ${w} |`), ""] : []),
+  ].join("\n");
+  writeFileSync("gradebook/UNMATCHED.md", um);
+  if (unmatched.length) console.log(`\nUNMATCHED: ${unmatched.length} repo(s) look like submissions but were not graded - see gradebook/UNMATCHED.md`);
+}
+
 console.log("\ngradebook written:");
 console.log(md);
 console.log("\n(grading only; deliver to students with: node tools/publish-grades.mjs " + section + " --execute  - after setting \"publish\": true on the ready activities)");
