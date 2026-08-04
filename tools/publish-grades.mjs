@@ -84,6 +84,28 @@ const allRows = lines.slice(1).filter(Boolean).map(parseCsvLine).map((f) => ({
 // the student publish and the Canvas push, not just Canvas.
 const held = (r) => policy.get(r.assignment)?.aiGraded && (r.aiScore == null || String(r.aiScore).trim() === "");
 
+// The grade the student actually holds, in the activity's own points - the same
+// number canvas-push writes. An AI-graded activity's grade is the reviewed
+// aiScore; a deterministic one scales passed/total to its declared points. An
+// activity that declares no points is scored by its test count, so the raw
+// passed/total IS the grade and is shown unchanged.
+const displayScore = (r) => {
+  const p = policy.get(r.assignment) || {};
+  const possible = p.totalPoints ?? p.autoPoints ?? null;
+  if (p.aiGraded) {
+    // Number("") is 0, so an unreviewed row would render as a delivered zero.
+    // Held rows are filtered out upstream; this keeps that true if they stop being.
+    const raw = String(r.aiScore ?? "").trim();
+    const n = Number(raw);
+    if (raw === "" || !Number.isFinite(n)) return r.score;
+    return possible != null ? `${n}/${possible}` : String(n);
+  }
+  if (possible == null) return r.score;
+  const [passed, total] = String(r.score).split("/").map(Number);
+  if (!Number.isFinite(passed) || !total) return r.score;
+  return `${Math.round((passed / total) * possible)}/${possible}`;
+};
+
 // Rows in this section, for published activities only, excluding held students.
 const rows = allRows.filter((r) =>
   r.repo.includes(`-${section}-`) && publishable(r.assignment) && !held(r) && (!onlyRepo || r.repo === onlyRepo));
@@ -140,7 +162,7 @@ function pushWorkspaceGrades(ws, studentRows) {
   for (const r of sorted) {
     writeFileSync(`${dir}/grades/${r.assignment}.json`, JSON.stringify({
       assignment: r.assignment, sourceRepo: r.repo, gradedCommit: r.sha,
-      gradedAt: r.gradedAt, score: r.score, late: !!r.late,
+      gradedAt: r.gradedAt, score: displayScore(r), automatedTests: r.score, late: !!r.late,
     }, null, 2) + "\n");
     const pngs = previewPngs(r);
     if (pngs.length) {
@@ -149,7 +171,7 @@ function pushWorkspaceGrades(ws, studentRows) {
       for (const img of pngs) cpSync(`${previewDir(r)}/${img}`, `${destDir}/${img}`);
       r._wsPreview = `./grades/previews/${r.assignment}/`;
       writeFileSync(`${destDir}/README.md`, [
-        `# ${r.assignment} - ${r.score}${r.late ? " (LATE)" : ""}`, "",
+        `# ${r.assignment} - ${displayScore(r)}${r.late ? " (LATE)" : ""}`, "",
         `Rendered page(s) of your submission, graded ${r.gradedAt.slice(0, 16).replace("T", " ")}.`, "",
         ...pngs.flatMap((img) => [`## ${img.replace(/\.png$/i, "")}`, "", `![${img}](./${img})`, ""]),
       ].join("\n"));
@@ -175,7 +197,7 @@ function pushWorkspaceGrades(ws, studentRows) {
     "| Assignment | Grade | Feedback | Preview | Late | Submission | Graded |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     ...sorted.map((r) =>
-      `| ${r.assignment} | ${r.score} | ${r.notes ? "[see](./FEEDBACK.md)" : ""} | ${r._wsPreview ? `[pages](${r._wsPreview})` : ""} | ${r.late ? "LATE" : ""} | [\`${r.sha.slice(0, 7)}\`](https://github.com/${OWNER}/${r.repo}/commit/${r.sha}) | ${r.gradedAt.slice(0, 16).replace("T", " ")} |`),
+      `| ${r.assignment} | ${displayScore(r)} | ${r.notes ? "[see](./FEEDBACK.md)" : ""} | ${r._wsPreview ? `[pages](${r._wsPreview})` : ""} | ${r.late ? "LATE" : ""} | [\`${r.sha.slice(0, 7)}\`](https://github.com/${OWNER}/${r.repo}/commit/${r.sha}) | ${r.gradedAt.slice(0, 16).replace("T", " ")} |`),
     "", "_Grades issued by the instructor. Source of truth is the teacher gradebook._", "",
   ].join("\n");
   writeFileSync(`${dir}/GRADES.md`, md);
