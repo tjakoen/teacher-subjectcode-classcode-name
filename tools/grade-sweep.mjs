@@ -13,12 +13,16 @@
 // Auth: uses your local `gh`/`git` credentials (run from a machine logged in
 // with access to the repos). The GitHub Actions version wraps this same script.
 
-import { execSync } from "node:child_process";
+import { execSync, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync, readdirSync,
 } from "node:fs";
+import { availableParallelism } from "node:os";
+import { promisify } from "node:util";
 import { runNotesPass } from "./lib/ai-feedback.mjs";
+
+const pExecFile = promisify(execFile);
 
 const section = process.argv[2];
 const force = process.argv.includes("--force");
@@ -28,7 +32,7 @@ const only = onlyArg ? onlyArg.split("=")[1] : null;
 const repoArg = process.argv.find((a) => a.startsWith("--repo="));
 const onlyRepo = repoArg ? repoArg.split("=")[1] : null; // grade just this one repo
 if (!section) {
-  console.error("usage: grade-sweep.mjs <section> [--force] [--dry-run] [--only=<id>]");
+  console.error("usage: grade-sweep.mjs <section> [--force] [--dry-run] [--only=<id>] [--repo=<name>] [--jobs=<n>]");
   process.exit(1);
 }
 
@@ -37,7 +41,53 @@ if (!section) {
 // score 0, not stall execSync until the runner's 6-hour kill eats the sweep.
 const sh = (cmd, opts = {}) =>
   execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 600_000, ...opts }).trim();
-const quiet = (cmd, opts = {}) => execSync(cmd, { stdio: "ignore", timeout: 600_000, ...opts });
+
+// Async twins of the helper above, used only inside the per-repo grading path
+// so several repos can be in flight at once. execSync blocks the event loop, so
+// nothing can overlap while it runs; these do not. Same 10-minute ceiling, and
+// the rejection carries .stdout/.signal exactly like the execSync error the
+// callers already handle.
+const shA = async (cmd, opts = {}) =>
+  (await pExecFile("/bin/sh", ["-c", cmd], { encoding: "utf8", maxBuffer: 1e8, timeout: 600_000, ...opts })).stdout.trim();
+const quietA = async (cmd, opts = {}) => {
+  await pExecFile("/bin/sh", ["-c", cmd], { encoding: "utf8", maxBuffer: 1e8, timeout: 600_000, ...opts });
+};
+
+// How many repos to clone + test at once. Billed Actions minutes are wall
+// clock, so overlapping the per-repo work cuts the bill directly. Capped at 4
+// because the clones are also GitHub API traffic and a bigger fan-out risks a
+// secondary rate limit for a shrinking return.
+const jobsArg = process.argv.find((a) => a.startsWith("--jobs="));
+const JOBS = Math.max(1, Number(jobsArg?.split("=")[1]) ||
+  Math.min(4, availableParallelism()));
+
+// Bounded worker pool. `onOrdered` fires per item, in ITEM order, as soon as
+// every earlier item has finished, which is what keeps the gradebook and the
+// run log byte-identical to a serial sweep no matter how the tasks interleave.
+// Streaming the completed prefix (rather than printing at the end) also keeps a
+// long sweep readable live, and stops a job that hits its timeout-minutes
+// ceiling from taking the whole log down with it.
+async function pool(items, limit, fn, onOrdered) {
+  const out = new Array(items.length);
+  const ready = new Array(items.length).fill(false);
+  let next = 0, flushed = 0;
+  const drain = () => {
+    while (flushed < items.length && ready[flushed]) {
+      onOrdered?.(out[flushed], flushed);
+      flushed++;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+      ready[i] = true;
+      drain();
+    }
+  }));
+  drain();
+  return out;
+}
 
 // In Actions, set GRADE_OWNER to the org (github.repository_owner); locally it
 // falls back to the authenticated gh user.
@@ -208,20 +258,24 @@ const graderHash = (id) => {
   return h.digest("hex").slice(0, 12);
 };
 
-function gradeVitest(dir, id) {
+// The graders run inside the worker pool, so they never print directly:
+// interleaved output from four repos at once would be unreadable and would make
+// the run log depend on timing. They append to the caller's `log` buffer, which
+// the sweep flushes in repo order.
+async function gradeVitest(dir, id, log) {
   cpSync(`grader/${id}`, dir, { recursive: true }); // overlay canonical tests
   try {
-    quiet("npm install --no-audit --no-fund --silent", { cwd: dir });
+    await quietA("npm install --no-audit --no-fund --silent", { cwd: dir });
   } catch {
     // No/broken package.json (e.g. a repo made from the wrong template) -> it
     // can't build, so it earns 0 rather than aborting the whole sweep.
     return { passed: 0, total: 0, malformed: true };
   }
   try {
-    quiet("npx vitest run --reporter=json --outputFile=.vit.json", { cwd: dir });
+    await quietA("npx vitest run --reporter=json --outputFile=.vit.json", { cwd: dir });
   } catch (e) {
     /* tests failing -> non-zero exit is expected; results still written */
-    if (e.signal) console.log(`  TIMEOUT: vitest killed after 10min (hung student code?)`);
+    if (e.signal) log.push(`  TIMEOUT: vitest killed after 10min (hung student code?)`);
   }
   const out = `${dir}/.vit.json`;
   if (!existsSync(out)) return { passed: 0, total: 0 };
@@ -237,10 +291,10 @@ function gradeVitest(dir, id) {
   return { passed: r.numPassedTests ?? 0, total: r.numTotalTests ?? 0, failures };
 }
 
-function gradeDart(dir, id) {
+async function gradeDart(dir, id, log) {
   cpSync(`grader/${id}`, dir, { recursive: true }); // overlay canonical tests
   try {
-    quiet("dart pub get", { cwd: dir });
+    await quietA("dart pub get", { cwd: dir });
   } catch {
     // No/broken pubspec (e.g. a repo made from the wrong template) -> it can't
     // build, so it earns 0 rather than aborting the whole sweep.
@@ -248,13 +302,10 @@ function gradeDart(dir, id) {
   }
   let out = "";
   try {
-    out = execSync("dart test --reporter json", {
-      cwd: dir, encoding: "utf8", maxBuffer: 1e8, stdio: ["ignore", "pipe", "pipe"],
-      timeout: 600_000,
-    });
+    out = await shA("dart test --reporter json", { cwd: dir });
   } catch (e) {
     out = (e.stdout || "").toString(); // tests failing -> non-zero exit; stdout still has the json events
-    if (e.signal) console.log(`  TIMEOUT: dart test killed after 10min (hung student code?)`);
+    if (e.signal) log.push(`  TIMEOUT: dart test killed after 10min (hung student code?)`);
   }
   let passed = 0, total = 0;
   const names = new Map(); // testID -> name (from testStart events)
@@ -331,6 +382,66 @@ for (const id of staleGrader) {
 }
 
 // ---- sweep ---------------------------------------------------------------
+console.log(`grading with ${JOBS} parallel job(s)`);
+
+// Clone + test one submission. Runs inside the worker pool, so it must touch
+// nothing shared: it reads `rows`/`seen` (never written during the pool) and
+// writes only its own .grade-work/<repo>. Everything it wants to change in the
+// gradebook comes back as data and is applied serially, in repo order, below.
+async function gradeOne(a, repo, stale) {
+  const dir = `${WORK}/${repo}`;
+  const log = [];
+  const done = (extra) => ({ log, ...extra });
+  // A clone can fail transiently (network / secondary rate limit) or for a
+  // genuinely broken repo. Don't let one bad clone abort the whole sweep -
+  // skip it this run (it gets picked up next time), with one quick retry.
+  try { await quietA(`gh repo clone ${OWNER}/${repo} ${dir} -- -q --depth=1`); }
+  catch {
+    try { await quietA(`gh repo clone ${OWNER}/${repo} ${dir} -- -q --depth=1`); }
+    catch { log.push(`skip  ${repo} (${a.id}) - clone failed (transient or broken); will retry next run`); return done(); }
+  }
+  // Submission sha = latest commit touching anything other than the receipt
+  // files, so our own receipt commits never make the next run re-grade.
+  // An empty repo (made from the template but never pushed) has no
+  // commits, so `git log`/`git rev-parse` aborts and would crash the whole
+  // sweep. It is not a submission, so skip it.
+  try { await shA(`git -C ${dir} rev-parse HEAD`); }
+  catch { log.push(`empty ${repo} (${a.id}) - no commits yet, skipping`); return done(); }
+  const sha =
+    await shA(`git -C ${dir} log -1 --format=%H -- . ':!grades' ':!GRADES.md'`) ||
+    await shA(`git -C ${dir} rev-parse HEAD`);
+  const stu = readStudent(dir);
+  const alreadyGraded = seen.has(`${repo}|${a.id}`);
+  // LOCKED assignment: a grade already recorded is frozen (re-submissions are
+  // ignored). A student not yet graded can still be graded, but flagged late.
+  if (a.locked && alreadyGraded) {
+    log.push(`lock  ${repo} (${a.id}) - frozen (locked, already graded)`);
+    return done({ freshen: stu });
+  }
+  // UNLOCKED: skip if unchanged since last grade (unless --force, or the
+  // canonical tests changed since that grade was computed).
+  if (!a.locked && !force && !stale && seen.get(`${repo}|${a.id}`) === sha) {
+    log.push(`skip  ${repo} (${a.id}) - already graded @ ${sha.slice(0, 7)}`);
+    return done({ freshen: stu }); // keep roster info fresh even when skipping
+  }
+  const res =
+    a.type === "quiz" ? gradeQuiz(dir, a.key)
+    : a.type === "dart" ? await gradeDart(dir, a.id, log)
+    : await gradeVitest(dir, a.id, log);
+  const score = res.total ? `${res.passed}/${res.total}` : "0/0";
+  const late = !!a.locked && !alreadyGraded; // first grade on a locked activity = late
+  const row = { repo, ...stu, assignment: a.id, sha, passed: res.passed, total: res.total, score, late, gradedAt: new Date().toISOString(), notes: "", aiScore: null, failures: res.failures || [] };
+  const flags = `${late ? " LATE" : ""}${res.malformed ? " MALFORMED(wrong-template?)" : ""}`;
+  log.push(`${dryRun ? "[dry-run] " : ""}grade ${repo} (${a.id}): ${score}${flags}`);
+  // Free the runner disk as we go: per-repo node_modules/.dart_tool add up
+  // to "No space left on device" over a big section (the 07-08 2125 sweep
+  // died that way). Source clones stay - previews/AI notes read them later.
+  // With JOBS repos in flight this matters more, not less.
+  rmSync(`${dir}/node_modules`, { recursive: true, force: true });
+  rmSync(`${dir}/.dart_tool`, { recursive: true, force: true });
+  return done({ row, sha });
+}
+
 for (const a of assignments) {
   // Manual / badge activities (manual:true, submit:"url"|"canvas") have no
   // namePrefix and no submission repos - they are graded in Canvas SpeedGrader.
@@ -339,13 +450,13 @@ for (const a of assignments) {
   const repos = listRepos(a.namePrefix);
   const peeked = peekRepos(repos);
   const stale = staleGrader.has(a.id);
+  // Pass 1, serial and cheap: decide what we can without cloning. Every branch
+  // here reaches the same verdict the post-clone checks would: a frozen locked
+  // grade ignores the sha entirely, and an unlocked skip needs the stored sha
+  // to BE the branch head (anything else falls through to the clone and is
+  // re-checked against the path-filtered sha, exactly as before).
+  const todo = [];
   for (const repo of repos) {
-    const dir = `${WORK}/${repo}`;
-    // Decide what we can without cloning. Every branch here reaches the same
-    // verdict the post-clone checks below would: a frozen locked grade ignores
-    // the sha entirely, and an unlocked skip needs the stored sha to BE the
-    // branch head (anything else falls through and is re-checked after the
-    // clone against the path-filtered sha, exactly as before).
     const pre = peeked.get(repo);
     if (pre) {
       if (!pre.head) { console.log(`empty ${repo} (${a.id}) - no commits yet, skipping`); continue; }
@@ -365,56 +476,25 @@ for (const a of assignments) {
         continue;
       }
     }
-    // A clone can fail transiently (network / secondary rate limit) or for a
-    // genuinely broken repo. Don't let one bad clone abort the whole sweep -
-    // skip it this run (it gets picked up next time), with one quick retry.
-    try { quiet(`gh repo clone ${OWNER}/${repo} ${dir} -- -q --depth=1`); }
-    catch {
-      try { quiet(`gh repo clone ${OWNER}/${repo} ${dir} -- -q --depth=1`); }
-      catch { console.log(`skip  ${repo} (${a.id}) - clone failed (transient or broken); will retry next run`); continue; }
-    }
-    // Submission sha = latest commit touching anything other than the receipt
-    // files, so our own receipt commits never make the next run re-grade.
-    const sha =
-      sh(`git -C ${dir} log -1 --format=%H -- . ':!grades' ':!GRADES.md'`) ||
-      sh(`git -C ${dir} rev-parse HEAD`);
-    const stu = readStudent(dir);
-    const alreadyGraded = seen.has(`${repo}|${a.id}`);
-    // LOCKED assignment: a grade already recorded is frozen (re-submissions are
-    // ignored). A student not yet graded can still be graded, but flagged late.
-    if (a.locked && alreadyGraded) {
-      const ex = rows.find((r) => r.repo === repo && r.assignment === a.id);
-      if (ex) Object.assign(ex, stu);
-      console.log(`lock  ${repo} (${a.id}) - frozen (locked, already graded)`);
-      continue;
-    }
-    // UNLOCKED: skip if unchanged since last grade (unless --force, or the
-    // canonical tests changed since that grade was computed).
-    if (!a.locked && !force && !stale && seen.get(`${repo}|${a.id}`) === sha) {
-      const ex = rows.find((r) => r.repo === repo && r.assignment === a.id);
-      if (ex) Object.assign(ex, stu); // keep roster info fresh even when skipping
-      console.log(`skip  ${repo} (${a.id}) - already graded @ ${sha.slice(0, 7)}`);
-      continue;
-    }
-    const res =
-      a.type === "quiz" ? gradeQuiz(dir, a.key)
-      : a.type === "dart" ? gradeDart(dir, a.id)
-      : gradeVitest(dir, a.id);
-    const score = res.total ? `${res.passed}/${res.total}` : "0/0";
-    const late = !!a.locked && !alreadyGraded; // first grade on a locked activity = late
-    const row = { repo, ...stu, assignment: a.id, sha, passed: res.passed, total: res.total, score, late, gradedAt: new Date().toISOString(), notes: "", aiScore: null, failures: res.failures || [] };
-    const idx = rows.findIndex((r) => r.repo === repo && r.assignment === a.id);
-    if (idx >= 0) rows[idx] = row; else rows.push(row);
-    seen.set(`${repo}|${a.id}`, sha);
-    gradedThisRun.add(`${repo}|${a.id}`); // genuinely (re)graded now -> eligible for AI notes
-    const flags = `${late ? " LATE" : ""}${res.malformed ? " MALFORMED(wrong-template?)" : ""}`;
-    console.log(`${dryRun ? "[dry-run] " : ""}grade ${repo} (${a.id}): ${score}${flags}`);
-    // Free the runner disk as we go: per-repo node_modules/.dart_tool add up
-    // to "No space left on device" over a big section (the 07-08 2125 sweep
-    // died that way). Source clones stay - previews/AI notes read them later.
-    rmSync(`${dir}/node_modules`, { recursive: true, force: true });
-    rmSync(`${dir}/.dart_tool`, { recursive: true, force: true });
+    todo.push(repo);
   }
+  // Pass 2, parallel: clone + test whatever survived the triage. The gradebook
+  // is applied from the pool's ORDERED callback rather than inside the tasks,
+  // which is what makes a parallel sweep produce byte-identical output to a
+  // serial one no matter how the work interleaves.
+  await pool(todo, JOBS, (repo) => gradeOne(a, repo, stale), (res, i) => {
+    const repo = todo[i];
+    for (const ln of res.log) console.log(ln);
+    if (res.freshen) {
+      const ex = rows.find((r) => r.repo === repo && r.assignment === a.id);
+      if (ex) Object.assign(ex, res.freshen);
+    }
+    if (!res.row) return;
+    const idx = rows.findIndex((r) => r.repo === repo && r.assignment === a.id);
+    if (idx >= 0) rows[idx] = res.row; else rows.push(res.row);
+    seen.set(`${repo}|${a.id}`, res.sha);
+    gradedThisRun.add(`${repo}|${a.id}`); // genuinely (re)graded now -> eligible for AI notes
+  });
 }
 
 // ---- AI feedback notes (after grading; best-effort) ----------------------
