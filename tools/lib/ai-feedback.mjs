@@ -111,6 +111,14 @@ function collectRubric(clone, a) {
 // the tablet shot is redundant and skipped.
 const MAX_IMAGES = 2;
 
+// A class that renders its own previews (row.pages) chooses WHICH frames to
+// take, so those are a deliberate, ordered walk through the app rather than a
+// guess: the Flutter activities shoot a flow (list, detail, after the tap,
+// after the form opens) and a static web page renders one shot per page. Cap
+// those higher, because dropping the second half of a flow is exactly what made
+// the old single-screenshot capture useless for judging an interactive app.
+const MAX_FLOW_IMAGES = 6;
+
 // Reuse the screenshots a submission already has: a class may render them
 // locally onto row.pages (pass previewDir), or reuse the Playwright shots a
 // project CI publishes to a `previews` branch (`"previews": "branch"`).
@@ -145,7 +153,7 @@ function fetchBranchPreviews(clone) {
 function collectScreenshots(row, a, work, previewDir) {
   if (row.pages && row.pages.length && typeof previewDir === "function") {
     const imgs = [];
-    for (const p of row.pages.slice(0, MAX_IMAGES)) {
+    for (const p of row.pages.slice(0, MAX_FLOW_IMAGES)) {
       try { imgs.push({ name: p.rel, b64: readFileSync(`${previewDir(row)}/${p.img}`).toString("base64") }); } catch { /* skip */ }
     }
     if (imgs.length) return imgs;
@@ -177,7 +185,7 @@ function outputFormat(a, hasShots) {
     : "Then the STUDENT-FACING feedback: a short, encouraging paragraph (or a few bullets) on what works and a couple of concrete next steps across code and, where the page is styled, design. Do NOT mention scores, points, the rubric, AI authorship, or that this was AI-generated.";
   const autoLine = isCode
     ? "(1) the AUTOMATED half - do NOT use the raw test pass-rate; translate the passed/failed checks into the rubric's weighted automated line items. Give each as `Item: x/max - reason`."
-    : "(1) the AUTOMATED half - do NOT use the raw test pass-rate; translate the checks into the rubric's weighted line items (builds/runs, real styling approach, the behavior/structure contract, responsiveness), using the attached screenshot to judge whether it rendered and whether it is responsive at 375px. Give each line item as `Item: x/max - reason`.";
+    : "(1) the AUTOMATED half - do NOT use the raw test pass-rate; translate the checks into the rubric's weighted line items (builds/runs, real styling approach, the behavior/structure contract, responsiveness), using the attached screenshots to judge whether it rendered and whether it is responsive at 375px. Give each line item as `Item: x/max - reason`.";
   const subjLine = isCode
     ? "(2) the CODE-QUALITY half - score each rubric criterion in that half (e.g. structure/architecture, naming, error handling, abstractions/OOP, organization, edge cases) from the code. Give each as `Criterion: x/max - reason`."
     : "(2) the DESIGN half - score each design criterion as `Criterion: x/max - reason` from the app, screenshots, and code.";
@@ -259,7 +267,7 @@ function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
     `## Automated result\nActivity ${a.id}, worth ${total} points. Raw automated tests: ${row.score} (raw count, NOT rubric points - translate per the rubric's weighted line items).${stylingLine}`,
     failList ? `### Automated checks that did not pass\n${failList}` : "### All automated checks passed.",
     shotRefs.length
-      ? `## Screenshots (open these image files to judge the design)\n${shotRefs.map((r) => `- ${r}`).join("\n")}`
+      ? `## Screenshots (open these image files to judge the design)\nListed in the order they were captured. For an app they walk one flow (a screen, then the same app after a tap, some typing or a navigation), so read them as a sequence: two consecutive shots that look identical mean that interaction did not work, which is design evidence as much as it is behavior evidence.\n${shotRefs.map((r) => `- ${r}`).join("\n")}`
       : "## Screenshots\nNone attached; comment on code only.",
     `## Student source\n${collectSourceFiles(clone)}`,
     `## Output format\n${outputFormat(a, shotRefs.length > 0)}`,
