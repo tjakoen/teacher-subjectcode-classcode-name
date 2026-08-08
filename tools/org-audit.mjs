@@ -40,6 +40,33 @@ const api = async (path) => {
   if (!res.ok) throw new Error(`${res.status} ${path}`);
   return res.json();
 };
+// One GraphQL client for both passes. Retries on the secondary rate limit
+// rather than giving up: this tool reads thousands of repos, so a transient 403
+// mid-run is normal and must not be mistaken for a real answer.
+// `partial: true` keeps whatever data came back even when GitHub also reports
+// errors. A batched query naming one deleted repo answers NOT_FOUND for that
+// alias and valid data for every other one; treating that as a total failure
+// would throw away 39 good reads to punish 1 dead repo.
+const gql = async (query, variables, { partial = false } = {}) => {
+  let last = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (res.ok) {
+      const j = await res.json();
+      if (j.errors && !(partial && j.data)) throw new Error(`graphql: ${j.errors.map((e) => e.message).join("; ")}`);
+      return j.data;
+    }
+    last = `graphql ${res.status}`;
+    if (![403, 429, 500, 502, 503].includes(res.status)) throw new Error(last);
+    await new Promise((r) => setTimeout(r, 15000 * (attempt + 1)));   // 15s, 30s, 45s, 60s
+  }
+  throw new Error(`${last} after 5 attempts`);
+};
+
 // Repo visibility, filled while listing. A student can flip their own repo to
 // public (they are its admin by design), and nothing else in the platform ever
 // looks at this - a public workspace publishes one student's grades, feedback
@@ -68,6 +95,47 @@ async function pool(items, n, fn) {
 // Classify: a definitive 404 means absent, a 403/429 means unknown and is
 // retried, and anything still unresolved is reported separately as NOT READ.
 const UNREAD = Symbol("unread");
+
+// Read student.json for many repos at once. One REST call per repo meant ~2,880
+// calls for a full three-org audit, which reliably exhausted the quota partway
+// through and left the access pass unable to run at all. This is the same
+// batched GraphQL lookup grade-sweep uses (peekRepos), and it turns those ~2,880
+// calls into ~72. Anything a batch cannot resolve falls back to the per-repo
+// REST read, so a malformed batch costs speed, never accuracy.
+const BATCH = 40; // 100 aliases overruns the GraphQL timeout; 40 is comfortable
+const readStudents = async (org, repos) => {
+  const out = new Map();
+  const field = (n, j) =>
+    `r${j}: repository(owner:${JSON.stringify(org)},name:${JSON.stringify(n)})` +
+    `{object(expression:"HEAD:student.json"){... on Blob{text}}}`;
+  const run = async (slice) => {
+    let data;
+    try { data = await gql(`query{${slice.map(field).join("\n")}}`, {}, { partial: true }); }
+    catch { return false; }
+    if (!data) return false;
+    slice.forEach((n, j) => {
+      const r = data[`r${j}`];
+      if (r == null) return;                       // no answer for this one -> REST fallback
+      const text = r.object?.text;
+      if (text == null) { out.set(n, null); return; }   // repo exists, no student.json
+      try { out.set(n, JSON.parse(text)); } catch { out.set(n, null); }
+    });
+    return true;
+  };
+  for (let i = 0; i < repos.length; i += BATCH) {
+    const slice = repos.slice(i, i + BATCH);
+    if (await run(slice)) continue;
+    const mid = Math.ceil(slice.length / 2);       // one retry in halves
+    await run(slice.slice(0, mid));
+    await run(slice.slice(mid));
+  }
+  const missed = repos.filter((n) => !out.has(n));
+  if (missed.length) {
+    (await pool(missed, 8, (r) => readStudent(org, r))).forEach((s, k) => out.set(missed[k], s));
+  }
+  return out;
+};
+
 const readStudent = async (org, repo) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -144,8 +212,7 @@ for (const org of ORGS) {
   cats.junk = cats.junk.filter((n) => !sweepRecovers(n));
 
   const toRead = [...cats.activity, ...recovered, ...cats.malformed, ...cats.junk];
-  const ids = {};
-  (await pool(toRead, 8, (r) => readStudent(org, r))).forEach((s, k) => { ids[toRead[k]] = s; });
+  const ids = Object.fromEntries(await readStudents(org, toRead));
 
   // group activity repos by (activity, section, student number)
   const byKey = {};
@@ -190,30 +257,6 @@ for (const org of ORGS) {
 // base permissions.
 await (async () => {
   const TEACHERS = new Set((loadConfig().teachers || []).map((t) => String(t).toLowerCase()));
-  // The access audit runs after the hygiene pass has already made thousands of
-  // REST reads, so it routinely lands on GitHub's secondary rate limit and used
-  // to give up on the first 403 - which is why this audit had never actually
-  // completed for any org. The token and scopes were fine the whole time. Back
-  // off and retry; only a persistent failure is worth reporting as unverified.
-  const gql = async (query, variables) => {
-    let last = "";
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const res = await fetch("https://api.github.com/graphql", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ query, variables }),
-      });
-      if (res.ok) {
-        const j = await res.json();
-        if (j.errors) throw new Error(`graphql: ${j.errors.map((e) => e.message).join("; ")}`);
-        return j.data;
-      }
-      last = `graphql ${res.status}`;
-      if (![403, 429, 500, 502, 503].includes(res.status)) throw new Error(last);
-      await new Promise((r) => setTimeout(r, 15000 * (attempt + 1)));   // 15s, 30s, 45s, 60s
-    }
-    throw new Error(`${last} after 5 attempts`);
-  };
   const ACCESS_QUERY = `
     query($org:String!, $cursor:String) {
       organization(login:$org) {
