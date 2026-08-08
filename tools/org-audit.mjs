@@ -105,6 +105,27 @@ const ghLogin = (s) => {
 // students copy, the published worked solutions, and the in-class demos.
 const publicOK = (n) => isTemplate(n) || isSolution(n) || isDemo(n);
 
+// Mirror of the grade sweep's own name matching (canon + matchesActivity in
+// tools/grade-sweep.mjs). The sweep already recovers the common drifts, so a
+// name that recovers costs nobody a grade and must NOT be reported as work.
+// This audit used to list all of them under RENAME and DELETE, which made it
+// noisy enough to ignore - and an ignored audit is how the real problems hid.
+//
+// Renaming a recovered repo is actively harmful: the gradebook row is keyed on
+// the repo name and a rename never 404s, so prune-gradebook can never clean up
+// the old row. You would strand a real grade to tidy a name that already works.
+const SWEEP_INFRA = /^(student|teacher)-|-solution$|yourname|classcode|live-demo/;
+const sweepCanon = (n) => n.toLowerCase().replace(/_/g, "-");
+const ACTIVITY_AT = /-(?:m\d+a\d+|q\d+|prelim|midterm)-/;
+const sweepRecovers = (n) => {
+  const c = sweepCanon(n);
+  if (SWEEP_INFRA.test(c)) return false;
+  if (!/-\d{4}-/.test(c)) return false;                  // section token must survive
+  if (/^(m\d+a\d+|q\d+|prelim|midterm)-/.test(c)) return true;   // underscores, doubled dashes, casing
+  const at = c.search(ACTIVITY_AT);                      // student handle prepended
+  return at > 0 && /^[a-z0-9.-]+$/.test(c.slice(0, at));
+};
+
 for (const org of ORGS) {
   const names = await listOrgRepos(org);
   const cats = { keep: [], sample: [], malformed: [], junk: [], activity: [], workspace: [] };
@@ -116,7 +137,13 @@ for (const org of ORGS) {
     else if (actish(n)) cats.malformed.push(n);
     else cats.junk.push(n);
   }
-  const toRead = [...cats.activity, ...cats.malformed, ...cats.junk];
+  // Pull the names the sweep already grades out of the two action buckets, so
+  // what is left in them is only what genuinely needs a human.
+  const recovered = [...cats.malformed, ...cats.junk].filter(sweepRecovers);
+  cats.malformed = cats.malformed.filter((n) => !sweepRecovers(n));
+  cats.junk = cats.junk.filter((n) => !sweepRecovers(n));
+
+  const toRead = [...cats.activity, ...recovered, ...cats.malformed, ...cats.junk];
   const ids = {};
   (await pool(toRead, 8, (r) => readStudent(org, r))).forEach((s, k) => { ids[toRead[k]] = s; });
 
@@ -133,6 +160,7 @@ for (const org of ORGS) {
   if (cats.sample.length)   { console.log(`\nDELETE - samples:`); cats.sample.forEach((n) => console.log(`  ${n}`)); }
   if (cats.junk.length)     { console.log(`\nDELETE/RENAME - junk / non-standard:`); cats.junk.forEach((n) => console.log(`  ${n}   [num=${num(ids[n]) || "-"} gh=${gh(ids[n]) || "-"}]`)); }
   if (cats.malformed.length){ console.log(`\nRENAME - malformed activity repos:`); cats.malformed.forEach((n) => { const act = (n.match(/^(m\d+a\d+|q\d+|prelim|midterm)/i) || [])[1]?.toLowerCase(); console.log(`  ${n}   ->  ${act}-${ids[n]?.classCode || "????"}-${ghLogin(ids[n]) || "UNKNOWN"}   [num=${num(ids[n]) || "-"}]`); }); }
+  if (recovered.length) { console.log(`\nOK - drifted name, graded anyway (${recovered.length}). The sweep normalizes these; do NOT rename, it would strand the gradebook row:`); recovered.forEach((n) => console.log(`  ${n}   [num=${num(ids[n]) || "-"}]`)); }
   const exposed = names.filter((n) => visibility[`${org}/${n}`] === "public" && !publicOK(n));
   if (exposed.length) { console.log(`\nPUBLIC - should be private (student work, grades and student.json are world-readable):`); exposed.forEach((n) => console.log(`  ${n}   [num=${num(ids[n]) || "-"} gh=${gh(ids[n]) || "-"}]`)); }
   if (dups.length) {
@@ -162,16 +190,29 @@ for (const org of ORGS) {
 // base permissions.
 await (async () => {
   const TEACHERS = new Set((loadConfig().teachers || []).map((t) => String(t).toLowerCase()));
+  // The access audit runs after the hygiene pass has already made thousands of
+  // REST reads, so it routinely lands on GitHub's secondary rate limit and used
+  // to give up on the first 403 - which is why this audit had never actually
+  // completed for any org. The token and scopes were fine the whole time. Back
+  // off and retry; only a persistent failure is worth reporting as unverified.
   const gql = async (query, variables) => {
-    const res = await fetch("https://api.github.com/graphql", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables }),
-    });
-    if (!res.ok) throw new Error(`graphql ${res.status}`);
-    const j = await res.json();
-    if (j.errors) throw new Error(`graphql: ${j.errors.map((e) => e.message).join("; ")}`);
-    return j.data;
+    let last = "";
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await fetch("https://api.github.com/graphql", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ query, variables }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j.errors) throw new Error(`graphql: ${j.errors.map((e) => e.message).join("; ")}`);
+        return j.data;
+      }
+      last = `graphql ${res.status}`;
+      if (![403, 429, 500, 502, 503].includes(res.status)) throw new Error(last);
+      await new Promise((r) => setTimeout(r, 15000 * (attempt + 1)));   // 15s, 30s, 45s, 60s
+    }
+    throw new Error(`${last} after 5 attempts`);
   };
   const ACCESS_QUERY = `
     query($org:String!, $cursor:String) {
