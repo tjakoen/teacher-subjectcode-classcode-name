@@ -56,11 +56,11 @@ jobs:
       GRADE_OWNER: ${{ github.repository_owner }}   # org, for the template repo links
       WORKSPACE_PREFIX: "student-SUBJECTCODE-CLASSCODE-"              # for the content pointer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Sync assignments to Canvas
         run: |

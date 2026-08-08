@@ -20,13 +20,13 @@ jobs:
       SECTION: "CLASSCODE"                    # FILL IN: LOCKED, e.g. "0000" - this repo publishes ONLY to its class
     steps:
       - name: Checkout teacher repo (default branch)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: teacher
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Authenticate git for cross-repo pushes
         run: gh auth setup-git   # makes `git push` to student repos use ORG_PAT

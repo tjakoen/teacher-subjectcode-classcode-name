@@ -42,10 +42,10 @@ jobs:
       SECTION: "CLASSCODE"                                  # LOCKED to one class
       WORKSPACE_PREFIX: "student-SUBJECTCODE-CLASSCODE-"           # workspace namespace for this section
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Authenticate git for cross-repo pushes
         run: gh auth setup-git
       - name: Publish receipts

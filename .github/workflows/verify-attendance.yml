@@ -29,10 +29,10 @@ jobs:
       SECTION: "CLASSCODE"                                  # LOCKED to one class
       ATTENDANCE_HMAC_SECRET: ${{ secrets.ATTENDANCE_HMAC_SECRET }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Verify + summarize
         id: verify
         run: node tools/verify-attendance.mjs
