@@ -17,7 +17,7 @@
 // Usage: node tools/publish-attendance.mjs <section> [--execute] [--only=<handle>]
 //
 // Env: GH_TOKEN or ORG_PAT (cross-repo contents write), GRADE_OWNER (org),
-// WORKSPACE_PREFIX (e.g. student-6apsi-2240-).
+// WORKSPACE_PREFIX (e.g. student-6xxx-0000-).
 
 import { execSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
@@ -51,7 +51,7 @@ const sessionDates = Array.isArray(summary.sessionDates) ? summary.sessionDates 
 const lastSession = summary.lastSession || sessionDates[sessionDates.length - 1] || null;
 
 // The student's original-case handle in a workspace name
-// (student-6apsi-2240-JZRain -> "JZRain").
+// (student-6xxx-0000-JuanDelaCruz -> "JuanDelaCruz").
 const stemOriginal = (repo) => {
   const i = repo.toLowerCase().indexOf(`-${String(section).toLowerCase()}-`);
   return i >= 0 ? repo.slice(i + String(section).length + 2) : repo.replace(/^[^-]*-/, "");

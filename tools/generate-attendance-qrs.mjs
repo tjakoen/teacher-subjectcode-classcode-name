@@ -30,7 +30,7 @@
 // Usage: node tools/generate-attendance-qrs.mjs <section> [--execute] [--force] [--only=<handle>]
 //
 // Env: GH_TOKEN or ORG_PAT (cross-repo contents write), GRADE_OWNER (org),
-// WORKSPACE_PREFIX (e.g. student-6apsi-2240-), ATTENDANCE_HMAC_SECRET (signing key).
+// WORKSPACE_PREFIX (e.g. student-6xxx-0000-), ATTENDANCE_HMAC_SECRET (signing key).
 
 import { execSync } from "node:child_process";
 import { createHmac } from "node:crypto";
@@ -64,7 +64,7 @@ const sign = (num) =>
 const qrText = (num) => `${section}.${num}.${sign(num)}`;
 
 // The student's original-case handle in a workspace name
-// (student-6apsi-2240-JZRain -> "JZRain").
+// (student-6xxx-0000-JuanDelaCruz -> "JuanDelaCruz").
 const stemOriginal = (repo) => {
   const i = repo.toLowerCase().indexOf(`-${String(section).toLowerCase()}-`);
   return i >= 0 ? repo.slice(i + String(section).length + 2) : repo.replace(/^[^-]*-/, "");

@@ -168,8 +168,8 @@ const allRepos = () => (allReposCache ??=
 // because nothing else in the platform name-checks a SUBMISSION repo
 // (audit-repo-names.mjs only looks at student-/teacher-). Two drifts are
 // unambiguous and are normalized here rather than left ungraded forever:
-// underscores in place of hyphens (`m4a2_2134_Barles`) and the student's handle
-// prepended (`Le1fux-m5a3-2240-Le1fux`). The SECTION token still has to match
+// underscores in place of hyphens (`m4a2_0000_DelaCruz`) and the student's handle
+// prepended (`jdelacruz-m5a3-0000-jdelacruz`). The SECTION token still has to match
 // exactly - guessing a section would file a grade under the wrong class, which
 // is worse than not grading it. Everything unclaimed lands in UNMATCHED.md.
 const canon = (n) => n.toLowerCase().replace(/_/g, "-");
@@ -182,7 +182,7 @@ const matchesActivity = (name, prefix) => {
   const c = canon(name), p = prefix.toLowerCase();
   if (INFRA.test(c)) return false;
   if (c.startsWith(p)) return true;
-  const at = c.indexOf(`-${p}`);          // "<handle>-m5a3-2240-..."
+  const at = c.indexOf(`-${p}`);          // "<handle>-m5a3-0000-..."
   return at > 0 && /^[a-z0-9.-]+$/.test(c.slice(0, at));
 };
 const inSection = (name) => canon(name).includes(`-${String(section).toLowerCase()}-`);

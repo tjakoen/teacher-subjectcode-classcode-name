@@ -33,7 +33,7 @@
 // Env baked into the section workflow (override with the matching flag):
 //   CANVAS_COURSE_ID  the Canvas course           (--course=<id>)
 //   GRADE_OWNER       the GitHub org, for repo links  (--org=<org>)
-//   WORKSPACE_PREFIX  e.g. student-6introweb-2106-    (--workspace-prefix=<p>)
+//   WORKSPACE_PREFIX  e.g. student-6xxx-0000-       (--workspace-prefix=<p>)
 //
 // Usage:
 //   node tools/canvas-sync-assignments.mjs [--course=<id>] [--org=<org>]

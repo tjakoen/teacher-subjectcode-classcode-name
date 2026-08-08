@@ -2,7 +2,7 @@
 // Audit student/teacher repo names against the course's expected naming:
 //   <role>-<subjectcode>-<classcode>-<rest>   (all lowercase)
 // Catches the mistakes we've actually seen students make when creating repos
-// from the template: wrong subjectcode (e.g. `6apsi` copied from an example),
+// from the template: wrong subjectcode (e.g. `6xxx` copied from an example),
 // swapped subject/classcode order, malformed separators (`.` instead of `-`),
 // and stray casing.
 //
@@ -73,8 +73,8 @@ function audit(name) {
   return { ok: false, reason: `does not match \`${expected}…\` (check subjectcode + classCode)` };
 }
 
-// Not every mismatch costs a grade. A workspace that is `student-6ADET-2125-x`
-// instead of `student-6adet-2125-x` resolves fine everywhere (the matchers all
+// Not every mismatch costs a grade. A workspace that is `student-6XXX-0000-x`
+// instead of `student-6xxx-0000-x` resolves fine everywhere (the matchers all
 // lowercase), and there are dozens of them, so exiting 1 on those made this
 // audit permanently red and therefore ignored. Casing is reported but does not
 // fail the run; anything that can actually lose a delivery still does.

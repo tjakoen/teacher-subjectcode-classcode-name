@@ -82,8 +82,8 @@ export const makeIdResolver = (policy) => {
   }
   return (label) => alias.get(aliasKey(label)) ?? tokenToId(label);
 };
-// The student's chosen suffix in a repo name, e.g. m1a1-2125-Catap -> "catap",
-// student-6ADET-2125-skpriniel -> "skpriniel". Bridges a blank-identity row to a
+// The student's chosen suffix in a repo name, e.g. m1a1-0000-DelaCruz -> "delacruz",
+// student-6XXX-0000-jdelacruz -> "jdelacruz". Bridges a blank-identity row to a
 // sibling that has identity, via the github-account namespace.
 export const repoStem = (repo, section) => {
   const r = String(repo);
