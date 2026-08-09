@@ -1,0 +1,74 @@
+name: Canvas announcement
+
+# Post a repo-owned announcement (announcements/<id>.md) to the Canvas course.
+# The repo stays the source of truth, so what students were told sits in git next
+# to the thing it was about.
+#
+# SAFE BY DEFAULT: mode=dry-run renders the HTML and posts nothing; mode=execute
+# posts it and reads the announcement back from Canvas.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL   e.g. https://hau.instructure.com
+#   CANVAS_TOKEN      a Canvas access token for the instructor
+on:
+  workflow_dispatch:
+    inputs:
+      announcement:
+        description: "Announcement id (the announcements/<id>.md basename)"
+        required: true
+      mode:
+        description: "dry-run (render only) | execute (post it)"
+        type: choice
+        options: ["dry-run", "execute"]
+        default: "dry-run"
+        required: true
+      delay:
+        description: "Optional schedule, e.g. 2026-08-10 07:00 (course local time)"
+        required: false
+      force:
+        description: "Post even if an announcement with this title exists (true/false)"
+        default: "false"
+        required: false
+      course_id:
+        description: "Canvas course ID (optional; overrides the repo default)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-announce
+  cancel-in-progress: false
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Post the announcement
+        env:
+          IN_ANNOUNCEMENT: ${{ github.event.inputs.announcement }}
+          IN_COURSE: ${{ github.event.inputs.course_id }}
+          IN_DELAY: ${{ github.event.inputs.delay }}
+          IN_FORCE: ${{ github.event.inputs.force }}
+          IN_MODE: ${{ github.event.inputs.mode }}
+        # An ARRAY, not a string: --delay carries a space, and an unquoted
+        # "$ARGS" would split it into two arguments.
+        run: |
+          ARGS=( "$IN_ANNOUNCEMENT" )
+          [ -n "$IN_COURSE" ] && ARGS+=( "--course=$IN_COURSE" )
+          [ -n "$IN_DELAY" ] && ARGS+=( "--delay=$IN_DELAY" )
+          [ "$IN_FORCE" = "true" ] && ARGS+=( "--force" )
+          [ "$IN_MODE" = "execute" ] && ARGS+=( "--execute" )
+          printf 'running: node tools/canvas-announce.mjs'; printf ' [%s]' "${ARGS[@]}"; printf '\n'
+          node tools/canvas-announce.mjs "${ARGS[@]}"

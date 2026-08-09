@@ -1,0 +1,81 @@
+name: Canvas assignment dates
+
+# Set an activity's due / available-from / available-until dates in Canvas.
+# canvas-sync-assignments authors everything about an assignment EXCEPT its dates
+# and published flag, on purpose. This is the dates half, for when the Canvas UI
+# is not reachable. It never changes points, description or published.
+#
+# SAFE BY DEFAULT: mode=dry-run shows the current dates, the planned change, and
+# what reopening would do to late flags and already-graded work. mode=execute
+# applies it and reads every date back.
+#
+# A time of exactly 00:00 is refused: Canvas rewrites midnight to 23:59:59 of the
+# same day. Write 23:59.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL, CANVAS_TOKEN
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Activity ids to move, comma separated (e.g. m5a2,m5a3)"
+        required: true
+      mode:
+        description: "dry-run (show the plan) | execute (apply it)"
+        type: choice
+        options: ["dry-run", "execute"]
+        default: "dry-run"
+        required: true
+      due:
+        description: "Due date, e.g. 2026-08-10 23:59 (never 00:00; 'none' clears)"
+        required: false
+      until:
+        description: "Available until, e.g. 2026-08-11 23:59 ('none' clears)"
+        required: false
+      from:
+        description: "Available from ('none' clears)"
+        required: false
+      course_id:
+        description: "Canvas course ID (optional; overrides the repo default)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-assignment-dates
+  cancel-in-progress: false
+
+jobs:
+  dates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Set the assignment dates
+        env:
+          IN_ONLY: ${{ github.event.inputs.only }}
+          IN_DUE: ${{ github.event.inputs.due }}
+          IN_UNTIL: ${{ github.event.inputs.until }}
+          IN_FROM: ${{ github.event.inputs.from }}
+          IN_COURSE: ${{ github.event.inputs.course_id }}
+          IN_MODE: ${{ github.event.inputs.mode }}
+        # An ARRAY, not a string: the dates carry a space.
+        run: |
+          ARGS=( "--only=$IN_ONLY" )
+          [ -n "$IN_DUE" ] && ARGS+=( "--due=$IN_DUE" )
+          [ -n "$IN_UNTIL" ] && ARGS+=( "--until=$IN_UNTIL" )
+          [ -n "$IN_FROM" ] && ARGS+=( "--from=$IN_FROM" )
+          [ -n "$IN_COURSE" ] && ARGS+=( "--course=$IN_COURSE" )
+          [ "$IN_MODE" = "execute" ] && ARGS+=( "--execute" )
+          printf 'running: node tools/canvas-assignment-dates.mjs'; printf ' [%s]' "${ARGS[@]}"; printf '\n'
+          node tools/canvas-assignment-dates.mjs "${ARGS[@]}"

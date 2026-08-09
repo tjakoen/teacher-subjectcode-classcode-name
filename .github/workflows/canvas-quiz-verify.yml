@@ -1,0 +1,53 @@
+name: Canvas quiz verify (read-only)
+
+# Compare the quiz Canvas actually stored against quizzes/<q>/quiz.json, question
+# by question: stems, types, points, choices, which option is marked correct, and
+# every accepted spelling on a fill-in-the-blank. The import log only says
+# "completed"; this says whether the result is right.
+#
+# READ-ONLY: it never writes to Canvas. Fails the run on any mismatch.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL, CANVAS_TOKEN
+on:
+  workflow_dispatch:
+    inputs:
+      quiz:
+        description: "Quiz id (e.g. m4-canvas-quiz)"
+        required: true
+      verbose:
+        description: "List every question, not only the mismatches (true/false)"
+        default: "false"
+        required: false
+      course_id:
+        description: "Canvas course ID (optional; overrides the repo default)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-quiz-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Verify the quiz against its source
+        run: |
+          ARGS="${{ github.event.inputs.quiz }}"
+          [ -n "${{ github.event.inputs.course_id }}" ] && ARGS="$ARGS --course=${{ github.event.inputs.course_id }}"
+          [ "${{ github.event.inputs.verbose }}" = "true" ] && ARGS="$ARGS --verbose"
+          node tools/canvas-quiz-verify.mjs $ARGS

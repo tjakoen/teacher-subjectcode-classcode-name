@@ -1,0 +1,54 @@
+name: Canvas activity status (read-only)
+
+# For each activity: is there a Canvas assignment, is it PUBLISHED, what is it
+# worth, and how many students have submitted or been graded. The gradebook only
+# knows what the sweep graded from repos, so it cannot see a Canvas assignment
+# students submitted to but nothing pulled back.
+#
+# READ-ONLY. Takes a course id, so this section's token can survey a sibling
+# section's Canvas course.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL, CANVAS_TOKEN
+on:
+  workflow_dispatch:
+    inputs:
+      course_id:
+        description: "Canvas course ID (blank = this section's course)"
+        required: false
+      only:
+        description: "Comma-separated activity ids, e.g. m5a1,m5a2,m5a3 (blank = all)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-activity-status
+  cancel-in-progress: false
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Report Canvas activity status
+        env:
+          IN_COURSE: ${{ github.event.inputs.course_id }}
+          IN_ONLY: ${{ github.event.inputs.only }}
+        run: |
+          ARGS=()
+          [ -n "$IN_COURSE" ] && ARGS+=( "--course=$IN_COURSE" )
+          [ -n "$IN_ONLY" ] && ARGS+=( "--only=$IN_ONLY" )
+          printf 'running: node tools/canvas-activity-status.mjs'; printf ' [%s]' "${ARGS[@]}"; printf '\n'
+          node tools/canvas-activity-status.mjs "${ARGS[@]}"

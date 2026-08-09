@@ -1,0 +1,116 @@
+name: Canvas quiz configure (dates + publish)
+
+# Finish an imported quiz over the API: set its window, attempts and answer
+# visibility, then publish it. canvas-quiz-import.yml lands a quiz UNPUBLISHED
+# with no dates on purpose; this is the second half, for when the Canvas UI is
+# not reachable.
+#
+# SAFE BY DEFAULT: mode=dry-run prints the current settings and the planned
+# change and writes nothing; mode=execute applies it and reads every setting
+# back from Canvas.
+#
+# Times are read in the course's local offset (+08:00) unless you write one.
+# A time of exactly 00:00 is refused: Canvas rewrites midnight to 23:59:59 of
+# the same day, moving a deadline by a day. Write 23:59.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL   e.g. https://hau.instructure.com
+#   CANVAS_TOKEN      a Canvas access token (course-content write)
+on:
+  workflow_dispatch:
+    inputs:
+      quiz:
+        description: "Quiz id (e.g. m4-canvas-quiz)"
+        required: true
+      mode:
+        description: "dry-run (show the plan) | execute (apply it)"
+        type: choice
+        options: ["dry-run", "execute"]
+        default: "dry-run"
+        required: true
+      unlock:
+        description: "Available from: 'now', or e.g. 2026-08-09 18:00"
+        required: false
+      lock:
+        description: "Available until, e.g. 2026-08-10 23:59 (never 00:00)"
+        required: false
+      attempts:
+        description: "Allowed attempts (-1 for unlimited)"
+        default: "1"
+        required: false
+      time_limit:
+        description: "Minutes, or 'none' to clear the limit"
+        default: "none"
+        required: false
+      shuffle:
+        description: "Shuffle the answers within each question (true/false)"
+        default: "true"
+        required: false
+      one_at_a_time:
+        description: "One question per page (true/false)"
+        default: "false"
+        required: false
+      answers_after_lock:
+        description: "Hold correct answers until the lock date (true/false)"
+        default: "true"
+        required: false
+      publish:
+        description: "Publish the quiz (true/false)"
+        default: "false"
+        required: false
+      course_id:
+        description: "Canvas course ID (optional; overrides the repo default)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-quiz-configure
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Configure the quiz in Canvas
+        env:
+          IN_QUIZ: ${{ github.event.inputs.quiz }}
+          IN_COURSE: ${{ github.event.inputs.course_id }}
+          IN_UNLOCK: ${{ github.event.inputs.unlock }}
+          IN_LOCK: ${{ github.event.inputs.lock }}
+          IN_ATTEMPTS: ${{ github.event.inputs.attempts }}
+          IN_TIME_LIMIT: ${{ github.event.inputs.time_limit }}
+          IN_SHUFFLE: ${{ github.event.inputs.shuffle }}
+          IN_ONE_AT_A_TIME: ${{ github.event.inputs.one_at_a_time }}
+          IN_ANSWERS_AFTER_LOCK: ${{ github.event.inputs.answers_after_lock }}
+          IN_PUBLISH: ${{ github.event.inputs.publish }}
+          IN_MODE: ${{ github.event.inputs.mode }}
+        # An ARRAY, not a string: the dates carry a space, and word-splitting an
+        # unquoted "$ARGS" turns --lock="2026-08-10 23:59" into a bare date,
+        # which then means midnight.
+        run: |
+          ARGS=( "$IN_QUIZ" )
+          [ -n "$IN_COURSE" ] && ARGS+=( "--course=$IN_COURSE" )
+          [ -n "$IN_UNLOCK" ] && ARGS+=( "--unlock=$IN_UNLOCK" )
+          [ -n "$IN_LOCK" ] && ARGS+=( "--lock=$IN_LOCK" )
+          [ -n "$IN_ATTEMPTS" ] && ARGS+=( "--attempts=$IN_ATTEMPTS" )
+          [ -n "$IN_TIME_LIMIT" ] && ARGS+=( "--time-limit=$IN_TIME_LIMIT" )
+          [ "$IN_SHUFFLE" = "true" ] && ARGS+=( "--shuffle" )
+          [ "$IN_ONE_AT_A_TIME" = "true" ] && ARGS+=( "--one-at-a-time" )
+          [ "$IN_ANSWERS_AFTER_LOCK" = "true" ] && ARGS+=( "--answers-after-lock" )
+          [ "$IN_PUBLISH" = "true" ] && ARGS+=( "--publish" )
+          [ "$IN_MODE" = "execute" ] && ARGS+=( "--execute" )
+          printf 'running: node tools/canvas-quiz-configure.mjs'; printf ' [%s]' "${ARGS[@]}"; printf '\n'
+          node tools/canvas-quiz-configure.mjs "${ARGS[@]}"

@@ -1,0 +1,65 @@
+name: Canvas quiz import (QTI)
+
+# One-way CONTENT import: build the repo-owned QTI package from quizzes/<q>/quiz.json
+# (the source of truth) and import it into Canvas via Content Migrations. Students
+# take the quiz IN Canvas; Canvas auto-grades it. This replaces the retired
+# publish-quiz flow (which copied a repo-graded quiz into student repos).
+#
+# SAFE BY DEFAULT: mode=dry-run builds the QTI and shows the plan but uploads
+# nothing; mode=execute imports it (UNPUBLISHED, for your review).
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL   e.g. https://hau.instructure.com
+#   CANVAS_TOKEN      a Canvas access token (course-content write) for the instructor
+on:
+  workflow_dispatch:
+    inputs:
+      quiz:
+        description: "Quiz id to import (e.g. q1)"
+        required: true
+      mode:
+        description: "dry-run (build + plan, no upload) | execute (import into Canvas)"
+        type: choice
+        options: ["dry-run", "execute"]
+        default: "dry-run"
+        required: true
+      course_id:
+        description: "Canvas course ID (optional; overrides the repo's CANVAS_COURSE_ID)"
+        required: false
+      force:
+        description: "Import even if a quiz with this id already exists in Canvas (true/false)"
+        default: "false"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-quiz-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Build the QTI package from quiz.json (deterministic, offline)
+        run: node tools/build-quiz-qti.mjs "${{ github.event.inputs.quiz }}"
+
+      - name: Import into Canvas
+        run: |
+          ARGS="${{ github.event.inputs.quiz }}"
+          [ -n "${{ github.event.inputs.course_id }}" ] && ARGS="$ARGS --course=${{ github.event.inputs.course_id }}"
+          [ "${{ github.event.inputs.mode }}" = "execute" ] && ARGS="$ARGS --execute"
+          [ "${{ github.event.inputs.force }}" = "true" ] && ARGS="$ARGS --force"
+          node tools/canvas-quiz-import.mjs $ARGS
