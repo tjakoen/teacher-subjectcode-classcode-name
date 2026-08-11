@@ -384,6 +384,14 @@ for (const id of staleGrader) {
 // ---- sweep ---------------------------------------------------------------
 console.log(`grading with ${JOBS} parallel job(s)`);
 
+// Framework exceptions seen while grading, per activity: text -> repos that hit
+// it. One student's crash is their own bug; the SAME text across several
+// submissions is the toolchain changing under the course, which is what makes
+// it worth a tripwire. Filled from the ordered callback, so the record is
+// deterministic no matter how the parallel jobs interleave.
+const advisorySeen = new Map(); // assignment id -> Map(text -> Set(repo))
+
+
 // Clone + test one submission. Runs inside the worker pool, so it must touch
 // nothing shared: it reads `rows`/`seen` (never written during the pool) and
 // writes only its own .grade-work/<repo>. Everything it wants to change in the
@@ -494,11 +502,79 @@ for (const a of assignments) {
     if (idx >= 0) rows[idx] = res.row; else rows.push(res.row);
     seen.set(`${repo}|${a.id}`, res.sha);
     gradedThisRun.add(`${repo}|${a.id}`); // genuinely (re)graded now -> eligible for AI notes
+    for (const t of res.advisories || []) {
+      if (!advisorySeen.has(a.id)) advisorySeen.set(a.id, new Map());
+      const m = advisorySeen.get(a.id);
+      if (!m.has(t)) m.set(t, new Set());
+      m.get(t).add(repo);
+    }
   });
 }
 
 // ---- AI feedback notes (after grading; best-effort) ----------------------
 await runNotesPass(rows, assignments, gradedThisRun, { work: WORK });
+
+// ---- anomaly tripwires ---------------------------------------------------
+// Two shapes that read as a student failing but are usually the toolchain. They
+// never change a grade; they are printed and written to gradebook/ANOMALIES.md
+// so the operator sees them before grades go out.
+//
+//   1. A test TOTAL that differs from the rest of the class. Everyone is graded
+//      against the SAME canonical tests, so a different count means the suite
+//      did not fully run: a compile error, or a single thrown exception killing
+//      every test in its file. Flutter 3.44's ListTile styling advisory did
+//      exactly that and cost three students six marks each before anyone
+//      noticed (see test/support/style_advisories.dart).
+//   2. The same framework exception in two or more submissions. See
+//      advisorySeen above.
+const anomalies = [];
+for (const a of assignments) {
+  if (!a.namePrefix) continue; // manual / Canvas-graded: no test count to compare
+  const mine = rows.filter((r) => r.assignment === a.id);
+  const scored = mine.filter((r) => r.total > 0);
+  if (scored.length < 5) continue; // too few submissions to know what normal is
+  const counts = new Map();
+  for (const r of scored) counts.set(r.total, (counts.get(r.total) || 0) + 1);
+  // Most common total wins; ties break on the HIGHER total, which is the more
+  // complete run. A total can land either side of the mode: BELOW means part of
+  // the suite never ran, ABOVE means the student wrote tests of their own and
+  // they are being counted in the denominator.
+  const mode = [...counts.entries()].sort((x, y) => y[1] - x[1] || y[0] - x[0])[0][0];
+  const odd = mine.filter((r) => r.total !== mode).sort((x, y) => x.repo.localeCompare(y.repo));
+  if (odd.length) {
+    anomalies.push(
+      `### ${a.id}: ${odd.length} submission(s) ran a different number of tests`, "",
+      `The class runs **${mode}** tests for this activity. These did not, so their score is measured against a different denominator. Check each one before the grade is delivered.`, "",
+      "| Repo | Score | Reading |", "| --- | --- | --- |",
+      ...odd.map((r) => `| \`${r.repo}\` | ${r.passed}/${r.total} | ${
+        r.total === 0 ? "did not build at all (compile error, or made from the wrong template)"
+        : r.total < mode ? "part of the suite never ran (one thrown exception kills every test in its file)"
+        : "counts tests the student wrote themselves, so the denominator is not the class's"} |`),
+      "",
+    );
+  }
+  const shared = [...(advisorySeen.get(a.id) || new Map())]
+    .filter(([, repos]) => repos.size >= 2)
+    .sort((x, y) => y[1].size - x[1].size);
+  if (shared.length) {
+    anomalies.push(
+      `### ${a.id}: ${shared.length} framework exception(s) hit more than one submission`, "",
+      "The same exception across several students points at the toolchain, not at them. If it is cosmetic advice rather than a real fault, add it to `test/support/style_advisories.dart` (and re-grade); if it is real, it belongs in the activity brief.", "",
+      "| Submissions | Exception |", "| --- | --- |",
+      ...shared.map(([text, repos]) => `| ${repos.size} | ${text.replace(/\|/g, "\\|")} |`),
+      "",
+    );
+  }
+}
+mkdirSync("gradebook", { recursive: true });
+writeFileSync("gradebook/ANOMALIES.md", [
+  `# Grading anomalies - section ${section}`, "",
+  anomalies.length
+    ? "Things that look like a student failing but are usually the toolchain. Nothing here changed a grade."
+    : "Nothing anomalous. Every submission ran the same number of tests as its class, and no framework exception hit more than one student.",
+  "", ...anomalies,
+].join("\n") + "\n");
+if (anomalies.length) console.log(`\nANOMALIES: see gradebook/ANOMALIES.md before delivering these grades`);
 
 // ---- write gradebook -----------------------------------------------------
 mkdirSync("gradebook", { recursive: true });

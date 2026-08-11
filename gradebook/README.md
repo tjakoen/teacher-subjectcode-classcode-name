@@ -18,6 +18,18 @@ The grade sweep writes the authoritative record here:
   or missing section, which cannot be guessed without risking filing a grade under
   the wrong class. Fix with `gh repo rename` and re-run the sweep - GitHub
   redirects the old URL, so the student's existing clone keeps working.
+- `ANOMALIES.md` - submissions that look like a student failing but are usually
+  the toolchain. **Read this after every sweep, before delivering grades.** Two
+  tripwires write it, and neither ever changes a grade. First, a test TOTAL that
+  differs from the rest of the class: everyone is graded against the same
+  canonical tests, so a different count means the suite did not fully run (a
+  compile error, or one thrown exception killing every test in its file) or that
+  the student's own tests are padding the denominator. Second, the same framework
+  exception in two or more submissions, which points at the toolchain rather than
+  at any of them. A live example of why: a Flutter SDK release added a cosmetic
+  advisory about a `ListTile` inside a coloured `Container`, `flutter_test`
+  counted it as an unexpected exception, and three students scored 1/7 on work
+  that was fine. Cosmetic advisories belong in `test/support/style_advisories.dart`.
 
 Nothing official is ever read back from a student repo. The receipts pushed into
 student repos are display-only copies. (Wired up in build step 2.)
