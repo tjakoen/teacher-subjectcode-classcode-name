@@ -61,8 +61,14 @@ const title = lines[titleIdx].replace(/^#\s+/, "").trim();
 const bodyMd = lines.slice(titleIdx + 1).join("\n").trim();
 
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// A bare URL becomes a real link. Without this a student has to select and copy
+// the text, which is enough friction that some of them simply will not.
+// Applied AFTER escaping, so the href carries the escaped form and cannot break
+// out of the attribute. Trailing sentence punctuation is left outside the link.
+const linkify = (s) =>
+  s.replace(/https?:\/\/[^\s<]+[^\s<.,:;"')\]]/g, (u) => `<a href="${u}">${u}</a>`);
 const inline = (s) =>
-  esc(s)
+  linkify(esc(s))
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 
