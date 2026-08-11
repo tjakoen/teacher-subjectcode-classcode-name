@@ -1,0 +1,76 @@
+name: Canvas assignment publish
+
+# Publish (or unpublish) an activity's Canvas assignment.
+# canvas-sync-assignments always CREATES an assignment unpublished, and neither it
+# nor canvas-assignment-dates ever flips that bit: making work visible to a class
+# is a decision, not a sync. This is that decision, for when the Canvas UI is not
+# reachable. It changes published only, never points, dates or the description.
+#
+# SAFE BY DEFAULT: mode=dry-run prints each assignment's state, its dates, and what
+# students would see the moment it goes live. mode=execute applies it and reads the
+# flag back.
+#
+# Publishing is visible and notified: the assignment appears on the students' list
+# and Canvas may email the class. Check the dates in the dry run first, and set them
+# with the Canvas assignment dates workflow BEFORE publishing.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   CANVAS_BASE_URL, CANVAS_TOKEN
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Activity ids to publish, comma separated (e.g. m7a1,m7a2)"
+        required: true
+      mode:
+        description: "dry-run (show the plan) | execute (apply it)"
+        type: choice
+        options: ["dry-run", "execute"]
+        default: "dry-run"
+        required: true
+      action:
+        description: "publish | unpublish (unpublish is refused once students have submitted)"
+        type: choice
+        options: ["publish", "unpublish"]
+        default: "publish"
+        required: true
+      course_id:
+        description: "Canvas course ID (optional; overrides the repo default)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-assignment-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+      CANVAS_TOKEN: ${{ secrets.CANVAS_TOKEN }}
+      CANVAS_COURSE_ID: "COURSEID"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Set the published flag
+        env:
+          IN_ONLY: ${{ github.event.inputs.only }}
+          IN_ACTION: ${{ github.event.inputs.action }}
+          IN_COURSE: ${{ github.event.inputs.course_id }}
+          IN_MODE: ${{ github.event.inputs.mode }}
+        # An ARRAY, not a string: an id list must never be word-split.
+        run: |
+          ARGS=( "--only=$IN_ONLY" )
+          [ "$IN_ACTION" = "unpublish" ] && ARGS+=( "--unpublish" )
+          [ -n "$IN_COURSE" ] && ARGS+=( "--course=$IN_COURSE" )
+          [ "$IN_MODE" = "execute" ] && ARGS+=( "--execute" )
+          printf 'running: node tools/canvas-assignment-publish.mjs'; printf ' [%s]' "${ARGS[@]}"; printf '\n'
+          node tools/canvas-assignment-publish.mjs "${ARGS[@]}"
