@@ -34,9 +34,26 @@ jobs:
       - name: Resolve target repos for the section
         id: targets
         run: |
-          repos=$(gh repo list "$ORG" --limit 5000 --json name -q '.[].name' \
-            | node teacher/tools/list-section-repos.mjs "$SECTION" student-)
-          echo "Targets for section $SECTION:"; echo "$repos"
+          # The org has thousands of repos and this GraphQL query has timed out
+          # with a 504 before. Without pipefail the failure was invisible: node
+          # succeeded on empty input, the target list came back empty, and the
+          # whole publish reported success while writing to nobody. Retry, then
+          # refuse to continue on an empty list.
+          set -o pipefail
+          repos=""
+          for attempt in 1 2 3; do
+            if repos=$(gh repo list "$ORG" --limit 5000 --json name -q '.[].name' \
+                 | node teacher/tools/list-section-repos.mjs "$SECTION" student-); then
+              [ -n "$repos" ] && break
+            fi
+            echo "attempt $attempt: no repos resolved, retrying in 20s"
+            sleep 20
+          done
+          if [ -z "$repos" ]; then
+            echo "::error::No target repos resolved for section $SECTION. Refusing to report success on a publish that would reach nobody."
+            exit 1
+          fi
+          echo "Targets for section $SECTION ($(echo "$repos" | wc -l | tr -d ' ') repos):"; echo "$repos"
           {
             echo "repos<<EOF"
             echo "$repos"

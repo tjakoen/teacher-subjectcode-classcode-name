@@ -121,8 +121,26 @@ if (!rows.length) {
 const wsByNumber = new Map(), wsByGithub = new Map(), wsByName = new Map();
 {
   const pfx = WORKSPACE_PREFIX.toLowerCase();
-  const wsRepos = JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`)) // limit > org repo count, else workspaces get silently dropped
-    .map((r) => r.name).filter((n) => n.toLowerCase().startsWith(pfx));
+  // A big org's repo listing is a GraphQL query that has returned a 504 before.
+  // An empty result here is NOT harmless: every row would fall through to "NO
+  // WORKSPACE FOUND - skipped" and the run would exit 0, reporting success on a
+  // delivery that reached nobody. Retry, then refuse to continue on empty.
+  let wsRepos = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      wsRepos = JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`)) // limit > org repo count, else workspaces get silently dropped
+        .map((r) => r.name).filter((n) => n.toLowerCase().startsWith(pfx));
+    } catch (e) {
+      console.error(`attempt ${attempt}: listing ${OWNER} failed (${e.message.split("\n")[0]})`);
+    }
+    if (wsRepos.length) break;
+    if (attempt < 3) { console.error(`attempt ${attempt}: no workspaces resolved, retrying`); sh("sleep 20"); }
+  }
+  if (!wsRepos.length) {
+    console.error(`No workspace repos matched "${WORKSPACE_PREFIX}" in ${OWNER}. Refusing to report success on a delivery that would reach nobody.`);
+    process.exit(1);
+  }
+  console.log(`Resolved ${wsRepos.length} workspace repos for prefix ${WORKSPACE_PREFIX}.`);
   for (const ws of wsRepos) {
     wsByName.set(ws.toLowerCase(), ws);
     try {
