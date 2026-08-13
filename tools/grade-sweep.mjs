@@ -243,6 +243,12 @@ function peekRepos(repos) {
 // unchanged; this notices an edited/fixed canonical test instead of silently
 // reusing a grade computed against the old one.
 const GRADER_HASHES = "gradebook/grader-hashes.json";
+// RUBRIC.md is deliberately excluded from this fingerprint. It is guidance for
+// the reviewed half, not a canonical test, so editing it must never mark an
+// activity stale: a re-graded row is rebuilt with aiScore null and notes "",
+// which would silently throw away every reviewed score the activity holds.
+// Rubric drift is fingerprinted separately by rubricHash and only reported.
+const RUBRIC_FILE = "RUBRIC.md";
 const graderHash = (id) => {
   const root = `grader/${id}`;
   if (!existsSync(root)) return "";
@@ -251,11 +257,16 @@ const graderHash = (id) => {
     for (const e of readdirSync(d, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) walk(`${d}/${e.name}`, r);
-      else { h.update(r); h.update(readFileSync(`${d}/${e.name}`)); }
+      else if (e.name !== RUBRIC_FILE) { h.update(r); h.update(readFileSync(`${d}/${e.name}`)); }
     }
   };
   try { walk(root, ""); } catch { return ""; }
   return h.digest("hex").slice(0, 12);
+};
+const rubricHash = (id) => {
+  const p = `grader/${id}/${RUBRIC_FILE}`;
+  if (!existsSync(p)) return "";
+  return createHash("sha1").update(readFileSync(p)).digest("hex").slice(0, 12);
 };
 
 // The graders run inside the worker pool, so they never print directly:
@@ -362,23 +373,37 @@ function readStudent(dir) {
 // Compare each activity's grader/ fingerprint with the one recorded at the last
 // sweep. Unlocked activities whose tests changed re-grade this run; locked ones
 // stay frozen (a delivered grade must not move on its own) and are reported.
+// Rubric drift is tracked apart from test drift, under the reserved _rubrics
+// key, and only ever reported: a rubric edit must not cost a reviewed score.
 const prevHashes = existsSync(GRADER_HASHES)
   ? (() => { try { return JSON.parse(readFileSync(GRADER_HASHES, "utf8")); } catch { return {}; } })()
   : {};
+const prevRubrics = prevHashes._rubrics && typeof prevHashes._rubrics === "object" ? prevHashes._rubrics : {};
 const curHashes = { ...prevHashes };
+const curRubrics = { ...prevRubrics };
 const staleGrader = new Set();
+const staleRubric = new Set();
 for (const a of assignments) {
   if (!a.namePrefix) continue;
+  const rh = rubricHash(a.id);
+  if (rh) {
+    curRubrics[a.id] = rh;
+    if (prevRubrics[a.id] && prevRubrics[a.id] !== rh) staleRubric.add(a.id);
+  }
   const h = graderHash(a.id);
   if (!h) continue;
   curHashes[a.id] = h;
   if (prevHashes[a.id] && prevHashes[a.id] !== h) staleGrader.add(a.id);
 }
+curHashes._rubrics = curRubrics;
 for (const id of staleGrader) {
   const locked = assignments.find((a) => a.id === id)?.locked;
   console.log(locked
     ? `NOTE  grader/${id}/ changed since the last sweep - grades stay frozen (locked); re-grade with --force --only=${id}`
     : `NOTE  grader/${id}/ changed since the last sweep - re-grading ${id}`);
+}
+for (const id of staleRubric) {
+  console.log(`NOTE  grader/${id}/RUBRIC.md changed since the last sweep - grades unchanged; re-review ${id} if the criteria moved`);
 }
 
 // ---- sweep ---------------------------------------------------------------

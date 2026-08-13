@@ -7,8 +7,13 @@ The grade sweep writes the authoritative record here:
   Canvas-import CSV.
 - `grader-hashes.json` - a fingerprint per activity of the canonical tests its
   grades were computed against. The sweep reuses a stored grade only while this
-  matches, so an edited test is noticed instead of silently skipped. Written by
-  the sweep; never hand-edit it.
+  matches, so an edited test is noticed instead of silently skipped. `RUBRIC.md`
+  is deliberately left out of that fingerprint and tracked separately under the
+  `_rubrics` key: it guides the reviewed half rather than the tests, and a
+  re-graded row is rebuilt with an empty `aiScore`, so counting a rubric edit as
+  test drift would throw away every reviewed score the activity holds. A rubric
+  change is reported and never re-grades. Written by the sweep; never hand-edit
+  it.
 - `UNMATCHED.md` - repos that look like submissions for this section but that no
   activity claimed, so they were never cloned and never graded. **Read this after
   every sweep.** Nothing else name-checks a submission repo (`audit-repo-names`
