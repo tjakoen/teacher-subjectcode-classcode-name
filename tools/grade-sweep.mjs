@@ -160,10 +160,33 @@ if (existsSync(CSV)) {
 // One org listing serves the whole sweep. `gh repo list` pages through every
 // repo in the org (thousands), so calling it once per activity re-fetched the
 // same listing 20+ times a run for nothing.
+// A big org's repo listing is a GraphQL query, and it fails: a 504 on the 2026-08-11
+// publish and a 503 on the 2026-08-17 sweep, both mid-run. Without a retry the whole
+// sweep dies on one transient answer and grades nobody, so this mirrors the retry
+// publish-grades.mjs already carries. An empty listing is refused rather than cached:
+// `allReposCache ??=` would pin `[]` for the rest of the run, and every activity would
+// then resolve zero submissions and report a clean sweep that graded no one.
 let allReposCache = null;
-const allRepos = () => (allReposCache ??=
-  JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`)) // limit > org repo count, else repos get silently dropped
-    .map((r) => r.name));
+const allRepos = () => {
+  if (allReposCache) return allReposCache;
+  let names = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      names = JSON.parse(sh(`gh repo list ${OWNER} --limit 5000 --json name`)) // limit > org repo count, else repos get silently dropped
+        .map((r) => r.name);
+    } catch (e) {
+      console.error(`attempt ${attempt}: listing ${OWNER} failed (${e.message.split("\n")[0]})`);
+    }
+    if (names.length) break;
+    if (attempt < 3) { console.error(`attempt ${attempt}: no repos resolved, retrying`); sh("sleep 20"); }
+  }
+  if (!names.length) {
+    console.error(`Listing ${OWNER} returned no repos after 3 attempts. Refusing to report a clean sweep that graded nobody.`);
+    process.exit(1);
+  }
+  console.log(`Resolved ${names.length} repos in ${OWNER}.`);
+  return (allReposCache = names);
+};
 // Repo names drift in ways that silently cost a student their whole grade,
 // because nothing else in the platform name-checks a SUBMISSION repo
 // (audit-repo-names.mjs only looks at student-/teacher-). Two drifts are
