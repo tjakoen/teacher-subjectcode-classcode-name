@@ -136,6 +136,9 @@ const parseCsvLine = (line) => {
 const CSV = "gradebook/grades.csv";
 const rows = [];
 const seen = new Map(); // `${repo}|${assignment}` -> graded sha
+const prior = new Map(); // `${repo}|${assignment}` -> the row as it stood before this run
+const preservedReviews = []; // rows whose reviewed score survived a re-grade, for the report
+const clearedReviews = [];   // rows whose reviewed score a re-grade legitimately invalidated
 const gradedThisRun = new Set(); // `${repo}|${assignment}` actually (re)graded now -> AI feedback gate
 if (existsSync(CSV)) {
   const lines = readFileSync(CSV, "utf8").trim().split("\n");
@@ -152,6 +155,7 @@ if (existsSync(CSV)) {
       };
       rows.push(row);
       seen.set(`${row.repo}|${row.assignment}`, row.sha);
+      prior.set(`${row.repo}|${row.assignment}`, row);
     }
   }
 }
@@ -486,7 +490,24 @@ async function gradeOne(a, repo, stale) {
     : await gradeVitest(dir, a.id, log);
   const score = res.total ? `${res.passed}/${res.total}` : "0/0";
   const late = !!a.locked && !alreadyGraded; // first grade on a locked activity = late
-  const row = { repo, ...stu, assignment: a.id, sha, passed: res.passed, total: res.total, score, late, gradedAt: new Date().toISOString(), notes: "", aiScore: null, failures: res.failures || [] };
+  // A re-grade normally rebuilds the row from scratch, which blanks the
+  // reviewed half (aiScore + notes). That is right when the automated verdict
+  // moved, and destructive when it did not: a submission repo's head also moves
+  // for reasons that have nothing to do with the student (a RUBRIC backfill, a
+  // FEEDBACK delivery, a receipt), and the sweep re-grades on any head change.
+  // Measured on 2240 m5a3: one sweep blanked 18 of 19 reviewed scores, and 17 of
+  // those 18 repos had changed NOTHING but platform files.
+  //
+  // So carry the reviewed half forward when the automated result is identical to
+  // the one that was reviewed. The reviewed score is a human judgement about
+  // code the tests still score exactly the same way, and re-running the sweep
+  // must not be able to silently throw it away. If passed/total moved, the code
+  // materially changed and the review is genuinely stale, so it still clears.
+  const was = prior.get(`${repo}|${a.id}`);
+  const reviewStands = was && was.aiScore != null && was.passed === res.passed && was.total === res.total;
+  if (reviewStands) preservedReviews.push(`${repo} (${a.id}) - kept reviewed ${was.aiScore} across a re-grade at the same ${res.passed}/${res.total}`);
+  else if (was && was.aiScore != null) clearedReviews.push(`${repo} (${a.id}) - CLEARED reviewed ${was.aiScore}: automated result moved ${was.passed}/${was.total} to ${res.passed}/${res.total}, so it needs reviewing again`);
+  const row = { repo, ...stu, assignment: a.id, sha, passed: res.passed, total: res.total, score, late, gradedAt: new Date().toISOString(), notes: reviewStands ? was.notes : "", aiScore: reviewStands ? was.aiScore : null, failures: res.failures || [] };
   const flags = `${late ? " LATE" : ""}${res.malformed ? " MALFORMED(wrong-template?)" : ""}`;
   log.push(`${dryRun ? "[dry-run] " : ""}grade ${repo} (${a.id}): ${score}${flags}`);
   // Free the runner disk as we go: per-repo node_modules/.dart_tool add up
@@ -621,8 +642,24 @@ writeFileSync("gradebook/ANOMALIES.md", [
     ? "Things that look like a student failing but are usually the toolchain. Nothing here changed a grade."
     : "Nothing anomalous. Every submission ran the same number of tests as its class, and no framework exception hit more than one student.",
   "", ...anomalies,
+  // What a re-grade did to already-reviewed scores. Both directions are
+  // reported: a reviewed score that survived, and one this run invalidated.
+  // Neither used to be mentioned anywhere, which is how 18 reviewed scores went
+  // missing for a day without a single line of output saying so.
+  ...(clearedReviews.length
+    ? ["### Reviewed scores cleared by this run", "",
+       "These submissions were re-graded to a DIFFERENT automated result, so the reviewed score no longer applies and was cleared. They need reviewing again before delivery.", "",
+       ...clearedReviews.map((s) => `- ${s}`), ""]
+    : []),
+  ...(preservedReviews.length
+    ? ["### Reviewed scores preserved across a re-grade", "",
+       "These were re-graded (their head moved) but scored identically, so the existing reviewed score was kept rather than blanked.", "",
+       ...preservedReviews.map((s) => `- ${s}`), ""]
+    : []),
 ].join("\n") + "\n");
 if (anomalies.length) console.log(`\nANOMALIES: see gradebook/ANOMALIES.md before delivering these grades`);
+if (clearedReviews.length) console.log(`\nREVIEWS CLEARED: ${clearedReviews.length} reviewed score(s) no longer apply; see gradebook/ANOMALIES.md`);
+if (preservedReviews.length) console.log(`REVIEWS KEPT: ${preservedReviews.length} reviewed score(s) survived a re-grade at an unchanged result`);
 
 // ---- write gradebook -----------------------------------------------------
 mkdirSync("gradebook", { recursive: true });

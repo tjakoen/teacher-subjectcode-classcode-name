@@ -59,7 +59,34 @@ export function warrantsFeedback(row, a) {
 // Token-bounded: gather candidates, prioritise the student's own code under
 // src/, then fill up to a byte cap - so when a submission is large the cap keeps
 // the code that matters, not stray config.
-function collectSourceFiles(clone, cap = 24000) {
+//
+// The two caps are sized from the estate, not guessed. Many students put a whole
+// Flutter app in one file (measured `lib/dex_app.dart` at 10k-19k chars across
+// m5a5), so a small per-file cap does not trim a long tail of boilerplate: it
+// amputates the second half of the only file that matters. Under the old
+// 8000-char cap that cost 48 notes-input files their detail-screen code, which
+// the drafts then had to judge from screenshots alone. PER_FILE_CAP now clears
+// the largest single source file measured anywhere in the estate with headroom,
+// and TOTAL_CAP is sized so raising it cannot make the total the new binding
+// constraint (the largest real submission totals ~21k of student source).
+const PER_FILE_CAP = 24000;
+const TOTAL_CAP = 60000;
+
+// When a file still has to be cut, keep the head AND the tail rather than a
+// prefix. In every stack here the interesting code is at the BOTTOM of a long
+// file (the detail screen after the list screen, the later routes after the
+// earlier ones), so a prefix-only cut reliably discards exactly what the rubric
+// asks about. The elision is marked and counted so the reader knows what is
+// missing instead of silently reading a file that appears to end early.
+function clipBody(body, cap = PER_FILE_CAP) {
+  if (body.length <= cap) return body;
+  const head = Math.floor(cap * 0.6);
+  const tail = cap - head;
+  const dropped = body.length - cap;
+  return `${body.slice(0, head)}\n\n...[${dropped} characters omitted from the middle of this file]\n\n${body.slice(-tail)}`;
+}
+
+function collectSourceFiles(clone, cap = TOTAL_CAP) {
   const skipDir = new Set(["node_modules", ".git", "dist", "build", "coverage", ".vite", "test", "tests", "__tests__"]);
   const keep = /\.(jsx?|tsx?|dart|css|scss|sass|html|py|md)$/i;     // code/markup + docs (README, HAUDEX.md, ...)
   const allowName = new Set(["package.json", "pubspec.yaml", "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.ts"]);
@@ -83,14 +110,21 @@ function collectSourceFiles(clone, cap = 24000) {
   // student code first (src/ then shorter paths), so the cap keeps what matters
   cands.sort((a, b) => (a.r.startsWith("src/") ? 0 : 1) - (b.r.startsWith("src/") ? 0 : 1) || a.r.localeCompare(b.r));
   const out = [];
+  const omitted = [];
   let used = 0;
   for (const { r, full } of cands) {
     let body = "";
     try { body = readFileSync(full, "utf8"); } catch { continue; }
-    if (body.length > 8000) body = body.slice(0, 8000) + "\n...[truncated]";
-    if (used + body.length > cap) continue;
+    body = clipBody(body);
+    // A file that does not fit is skipped rather than cut short, so the files
+    // that DO make it are whole. Record it: an unannounced omission reads to the
+    // drafter as "the student never wrote this", which is a different verdict.
+    if (used + body.length > cap) { omitted.push(r); continue; }
     used += body.length;
     out.push(`--- ${r} ---\n${body}`);
+  }
+  if (omitted.length) {
+    out.push(`--- [not included: over the ${cap}-character source budget] ---\n${omitted.join("\n")}`);
   }
   return out.join("\n\n");
 }
