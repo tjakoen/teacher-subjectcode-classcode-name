@@ -25,7 +25,7 @@
 
 import { execSync } from "node:child_process";
 import { rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
-import { loadPolicy, loadGradebook } from "./lib/gradebook.mjs";
+import { loadGradebook } from "./lib/gradebook.mjs";
 import { runNotesPass } from "./lib/ai-feedback.mjs";
 
 const section = process.argv[2];
@@ -57,15 +57,20 @@ mkdirSync(WORK, { recursive: true });
 // A finals set marks report/docs/project as ai-grading; journal + presentation
 // are graded by hand and are correctly skipped here (warrantsFeedback is false
 // for a non-ai-grading row, but we also never build a row for them).
-// External-repo activities: ai-grading and NO sourceSubpath. A sourceSubpath
-// marks a workspace deliverable (report/docs/journal), which grade-workspace-docs
-// handles; this tool grades only the external public project repo.
-const assignments = loadPolicy();
+// External-repo activities: ai-grading, NO sourceSubpath, and NO namePrefix. A
+// sourceSubpath marks a workspace deliverable (report/docs/journal); a
+// namePrefix marks an org SUBMISSION repo graded by the sweep (e.g. the m4a4 /
+// m5a5 capstones). The finals project is the student's external public repo, so
+// it has neither.
+// Read the RAW assignments array (not loadPolicy, which returns a normalized
+// Map keyed by id and drops sourceSubpath). runNotesPass + writeNotesInput need
+// the raw objects: id, feedback, totalPoints, sourceSubpath.
+const assignments = JSON.parse(readFileSync("grader/assignments.json", "utf8"));
 const aiActivities = assignments.filter(
-  (a) => a["ai-grading"] && !a.sourceSubpath && (!onlyId || a.id === onlyId),
+  (a) => a["ai-grading"] && !a.sourceSubpath && !a.namePrefix && (!onlyId || a.id === onlyId),
 );
 if (!aiActivities.length) {
-  console.error(onlyId ? `No external ai-grading activity ${onlyId} (ai-grading, no sourceSubpath) in assignments.json.` : "No external ai-grading activities (ai-grading, no sourceSubpath) in assignments.json.");
+  console.error(onlyId ? `No external ai-grading activity ${onlyId} (ai-grading, no sourceSubpath, no namePrefix) in assignments.json.` : "No external ai-grading activities (ai-grading, no sourceSubpath, no namePrefix) in assignments.json.");
   process.exit(1);
 }
 console.log(`Owner ${OWNER}, section ${section}, prefix ${WORKSPACE_PREFIX}`);

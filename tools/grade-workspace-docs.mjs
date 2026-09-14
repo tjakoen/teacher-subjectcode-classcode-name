@@ -22,8 +22,8 @@
 // (the student workspace repo prefix for this section).
 
 import { execSync } from "node:child_process";
-import { rmSync, mkdirSync } from "node:fs";
-import { loadPolicy, loadGradebook } from "./lib/gradebook.mjs";
+import { rmSync, mkdirSync, readFileSync } from "node:fs";
+import { loadGradebook } from "./lib/gradebook.mjs";
 import { runNotesPass } from "./lib/ai-feedback.mjs";
 
 const section = process.argv[2];
@@ -54,7 +54,10 @@ mkdirSync(WORK, { recursive: true });
 // Workspace-deliverable activities: ai-grading AND a sourceSubpath. The
 // sourceSubpath is what separates these from the external-repo project (a7,
 // which has ai-grading but no subpath and is graded by grade-external-repos).
-const assignments = loadPolicy();
+// Read the RAW assignments array (not loadPolicy, which returns a normalized
+// Map keyed by id and drops sourceSubpath). runNotesPass + writeNotesInput need
+// the raw objects: id, feedback, totalPoints, sourceSubpath.
+const assignments = JSON.parse(readFileSync("grader/assignments.json", "utf8"));
 const wsActivities = assignments.filter(
   (a) => a["ai-grading"] && a.sourceSubpath && (!onlyId || a.id === onlyId),
 );
