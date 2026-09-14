@@ -86,7 +86,12 @@ function clipBody(body, cap = PER_FILE_CAP) {
   return `${body.slice(0, head)}\n\n...[${dropped} characters omitted from the middle of this file]\n\n${body.slice(-tail)}`;
 }
 
-function collectSourceFiles(clone, cap = TOTAL_CAP) {
+// subpath scopes the walk to one folder of the clone (e.g. "project" or
+// "journal" for a workspace-based deliverable, where only that zone is the
+// student's submission and the rest of the workspace is instructor-owned
+// content). Empty subpath walks the whole clone, the original behaviour. Paths
+// in the output stay relative to that root so the drafter reads clean names.
+function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "") {
   const skipDir = new Set(["node_modules", ".git", "dist", "build", "coverage", ".vite", "test", "tests", "__tests__"]);
   const keep = /\.(jsx?|tsx?|dart|css|scss|sass|html|py|md)$/i;     // code/markup + docs (README, HAUDEX.md, ...)
   const allowName = new Set(["package.json", "pubspec.yaml", "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.ts"]);
@@ -106,7 +111,7 @@ function collectSourceFiles(clone, cap = TOTAL_CAP) {
       cands.push({ r, full });
     }
   };
-  walk(clone, "");
+  walk(subpath ? `${clone}/${String(subpath).replace(/\/+$/, "")}` : clone, "");
   // student code first (src/ then shorter paths), so the cap keeps what matters
   cands.sort((a, b) => (a.r.startsWith("src/") ? 0 : 1) - (b.r.startsWith("src/") ? 0 : 1) || a.r.localeCompare(b.r));
   const out = [];
@@ -303,7 +308,7 @@ function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
     shotRefs.length
       ? `## Screenshots (open these image files to judge the design)\nListed in the order they were captured. For an app they walk one flow (a screen, then the same app after a tap, some typing or a navigation), so read them as a sequence: two consecutive shots that look identical mean that interaction did not work, which is design evidence as much as it is behavior evidence.\n${shotRefs.map((r) => `- ${r}`).join("\n")}`
       : "## Screenshots\nNone attached; comment on code only.",
-    `## Student source\n${collectSourceFiles(clone)}`,
+    `## Student source\n${collectSourceFiles(clone, undefined, a.sourceSubpath)}`,
     `## Output format\n${outputFormat(a, shotRefs.length > 0)}`,
   ].filter(Boolean).join("\n\n");
 
