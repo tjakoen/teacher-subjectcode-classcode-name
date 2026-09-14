@@ -149,7 +149,10 @@ for (const ws of workspaces) {
   for (const a of aiActivities) {
     const key = `${ws}|${a.id}`;
     if (hasNote.has(key) && !force) continue; // keep an existing (maybe reviewed) note
-    rows.push({ repo: ws, assignment: a.id, score: 0, total: 0, notes: "", aiScore: "" });
+    // total:1/passed:0 so warrantsFeedback qualifies the row - these activities
+    // have no automated tests (the score is the reviewed rubric total applied
+    // later), but a feedback:"code"/"project" row warrants a draft regardless.
+    rows.push({ repo: ws, assignment: a.id, score: 0, passed: 0, total: 1, failures: [], notes: "", aiScore: "" });
     gradedThisRun.add(key);
   }
 }

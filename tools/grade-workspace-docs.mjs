@@ -111,7 +111,10 @@ for (const ws of workspaces) {
   for (const a of wsActivities) {
     const key = `${ws}|${a.id}`;
     if (hasNote.has(key) && !force) continue; // keep an existing (maybe reviewed) note
-    rows.push({ repo: ws, assignment: a.id, score: 0, total: 0, notes: "", aiScore: "" });
+    // total:1/passed:0 so warrantsFeedback qualifies the row - these workspace
+    // deliverables have no automated tests; a feedback:"code" row warrants a
+    // draft regardless (the score is the reviewed rubric total applied later).
+    rows.push({ repo: ws, assignment: a.id, score: 0, passed: 0, total: 1, failures: [], notes: "", aiScore: "" });
     gradedThisRun.add(key);
   }
 }
