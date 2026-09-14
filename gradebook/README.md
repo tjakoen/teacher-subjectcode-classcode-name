@@ -105,11 +105,36 @@ for you to review.
   at any score. Omit for a plain activity (feedback only when not perfect).
 - `"previews": "branch"` - reuse the Playwright screenshots the project repo's
   CI publishes to its `previews` branch, so the AI sees the rendered app.
+- `"sourceSubpath": "<zone>"` - finals only. Marks a deliverable the student
+  writes in their org WORKSPACE rather than a submission repo: `"project"` for
+  the increment report and documentation, `"journal"` for the reflection
+  journal. It scopes AI feedback to that one workspace zone. Read only by the
+  finals tools below, NOT by `loadPolicy` (which drops it).
 - Each AI-graded activity ships a **`RUBRIC.md`** (canonical copy in
   `grader/<id>/RUBRIC.md`, also placed in the activity repo for students; shape
   from `grader/RUBRIC-TEMPLATE.md`); the AI grounds its feedback and score in
   it. Plain activities have no rubric - tests alone judge them. Per-class
   tone/level lives in `grader/class-prompt.md`.
+
+### Finals AI grading (deliverables outside the org sweep)
+
+The finals module (m8 for APSI/ADET, m12 for INTROWEB) is not graded by
+`grade-sweep.mjs`, because none of its deliverables is an org submission repo:
+the report, documentation, and journal live in the student's own WORKSPACE, and
+the project code lives in the student's OWN public repo. Two dedicated tools feed
+the same held-for-review AI pipeline (they only write `notes-input`, never a
+score, never a student push):
+
+- `tools/grade-workspace-docs.mjs <section>` - clones each org workspace and
+  scopes the AI to `sourceSubpath` (`project` for report + docs, `journal` for
+  the journal). Grades activities that are `ai-grading` + `sourceSubpath`.
+- `tools/grade-external-repos.mjs <section>` - reads each student's public
+  project repo URL from their workspace `project/README.md`, clones it (public,
+  no token). Grades activities that are `ai-grading` + no `sourceSubpath` + no
+  `namePrefix` (so the m4a4/m5a5 submission-repo capstones stay out).
+
+Both need `GRADE_OWNER` + `WORKSPACE_PREFIX` env; dry-run first. The presentation
+(video + slides) is graded by hand - the AI cannot watch it.
 
 ## Pushing grades straight to Canvas (API)
 

@@ -43,7 +43,7 @@ const quiet = (cmd) => execSync(cmd, { stdio: ["ignore", "ignore", "ignore"] });
 const OWNER = process.env.GRADE_OWNER || sh("gh api user -q .login");
 const WORKSPACE_PREFIX = process.env.WORKSPACE_PREFIX;
 if (!WORKSPACE_PREFIX) {
-  console.error("WORKSPACE_PREFIX env is required (e.g. student-6introweb-2106-). It is set per section in the workflow.");
+  console.error("WORKSPACE_PREFIX env is required (e.g. student-<subject>-<section>-). It is set per section in the workflow.");
   process.exit(1);
 }
 

@@ -19,7 +19,7 @@
 //
 // Env: GRADE_OWNER (the teacher org; defaults to the gh user), WORKSPACE_PREFIX
 // (the student workspace repo prefix for this section, e.g.
-// "student-6introweb-2106-"). --only limits to one activity id; --force
+// "student-<subject>-<section>-"). --only limits to one activity id; --force
 // rewrites an input even if a note already exists; --dry-run resolves and clones
 // nothing, only reporting what it would do.
 
@@ -45,7 +45,7 @@ const quiet = (cmd) => execSync(cmd, { stdio: ["ignore", "ignore", "ignore"] });
 const OWNER = process.env.GRADE_OWNER || sh("gh api user -q .login");
 const WORKSPACE_PREFIX = process.env.WORKSPACE_PREFIX;
 if (!WORKSPACE_PREFIX) {
-  console.error("WORKSPACE_PREFIX env is required (e.g. student-6introweb-2106-). It is set per section in the workflow.");
+  console.error("WORKSPACE_PREFIX env is required (e.g. student-<subject>-<section>-). It is set per section in the workflow.");
   process.exit(1);
 }
 
