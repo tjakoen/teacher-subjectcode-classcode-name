@@ -25,6 +25,11 @@
 //     before adopting the standard.
 //   * It NEVER renames an existing assignment unless you pass --rename, and it
 //     NEVER sets due_at or published.
+//   * A repo activity takes an image upload in Canvas as PROOF of submission.
+//     The repo is still the graded artifact - the upload is evidence a student
+//     can point at when a push, a rename or a template copy goes wrong. The
+//     upload is capped to image types so it cannot become a second code
+//     dropbox that nobody grades.
 //
 // Auth (never commit these):
 //   CANVAS_BASE_URL   e.g. https://hau.instructure.com
@@ -88,6 +93,11 @@ const apiGetAll = async (path) => {
   return out;
 };
 
+// Proof uploads are images (plus PDF, which is what a phone "print to file"
+// and most screenshot tools produce). Anything a grader would have to run -
+// .html, .js, .zip - is deliberately absent: those live in the repo.
+const PROOF_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "pdf"];
+
 // ---- description standard (docs/canvas-activities.md) ---------------------
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 // A plain-text body (grader/<id>/CANVAS.md) -> simple HTML: blank lines split
@@ -131,10 +141,11 @@ function buildDescription(a) {
   const pts = a.totalPoints ?? a.autoPoints ?? null;
   const grade = [];
   if (fam === "manual") {
-    grade.push("Submit by pasting your live link as the submission (no repo, no upload).");
+    grade.push("Submit by pasting your link as the submission (no upload).");
     grade.push(existsSync(`grader/${a.id}/RUBRIC.md`) ? "Graded on a rubric, generously." : "Graded on completion.");
   } else if (fam === "repo") {
     grade.push("Submit by pushing to your GitHub repo; the autograder checks it on every push.");
+    grade.push("Then upload a screenshot of your finished work here as proof of submission. The upload is your receipt, not your grade: the score comes from the repo either way.");
     grade.push(a["ai-grading"] ? "Score: automated tests plus a design rubric." : "Score: automated tests (each test maps to points).");
   } else {
     grade.push("This activity is taken in Canvas.");
@@ -153,9 +164,11 @@ function desired(a) {
   const pts = a.totalPoints ?? a.autoPoints ?? null;   // null -> do not set
   const submission_types =
     fam === "manual" ? ["online_url"]
-    : fam === "repo" ? ["none"]          // graded via canvas-push, not a Canvas upload
+    : fam === "repo" ? ["online_upload"] // proof image; the score still comes from canvas-push
     : null;                              // quiz: leave to the QTI import
-  return { name, description: buildDescription(a), points: pts, submission_types, fam };
+  // Only meaningful alongside online_upload; Canvas ignores it otherwise.
+  const allowed_extensions = fam === "repo" ? PROOF_EXTENSIONS : null;
+  return { name, description: buildDescription(a), points: pts, submission_types, allowed_extensions, fam };
 }
 
 // ---- load activities + live Canvas assignments ---------------------------
@@ -197,6 +210,8 @@ for (const a of activities) {
   if (d.points != null && +existing.points_possible !== +d.points) changes.push(`points ${existing.points_possible} -> ${d.points}`);
   if (doSubmit && d.submission_types && (existing.submission_types || []).join(",") !== d.submission_types.join(","))
     changes.push(`submit ${(existing.submission_types || []).join(",")} -> ${d.submission_types.join(",")}`);
+  if (doSubmit && d.allowed_extensions && (existing.allowed_extensions || []).join(",") !== d.allowed_extensions.join(","))
+    changes.push(`extensions ${(existing.allowed_extensions || []).join(",") || "any"} -> ${d.allowed_extensions.join(",")}`);
   if (doDesc && (existing.description || "").trim() !== d.description.trim()) changes.push("description");
 
   if (changes.length) plan.update.push({ a, d, existing, changes });
@@ -263,6 +278,7 @@ for (const { a, d } of plan.create) {
   const assignment = { name: d.name, description: d.description, published: false };
   if (d.points != null) assignment.points_possible = d.points;
   if (d.submission_types) assignment.submission_types = d.submission_types;
+  if (d.allowed_extensions) assignment.allowed_extensions = d.allowed_extensions;
   const res = await api(`/courses/${courseId}/assignments`, { method: "POST", body: JSON.stringify({ assignment }) });
   const made = await res.json();
   created++;
@@ -276,6 +292,7 @@ for (const { d, existing, changes } of plan.update) {
   if (doRename && existing.name !== d.name) assignment.name = d.name;
   if (d.points != null && +existing.points_possible !== +d.points) assignment.points_possible = d.points;
   if (doSubmit && d.submission_types) assignment.submission_types = d.submission_types;
+  if (doSubmit && d.allowed_extensions) assignment.allowed_extensions = d.allowed_extensions;
   if (doDesc) assignment.description = d.description;
   await api(`/courses/${courseId}/assignments/${existing.id}`, { method: "PUT", body: JSON.stringify({ assignment }) });
   updated++;
