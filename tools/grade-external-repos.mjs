@@ -62,15 +62,20 @@ mkdirSync(WORK, { recursive: true });
 // namePrefix marks an org SUBMISSION repo graded by the sweep (e.g. the m4a4 /
 // m5a5 capstones). The finals project is the student's external public repo, so
 // it has neither.
+// "externalRepo": false is the explicit opt-out, for a row that is ai-grading
+// only so it reaches the Console review lane and has no project repo behind it
+// at all (the APSI m6a0 title proposal). Without it such a row matches this
+// filter and the tool tries to grade a title by cloning a repository that was
+// never named.
 // Read the RAW assignments array (not loadPolicy, which returns a normalized
 // Map keyed by id and drops sourceSubpath). runNotesPass + writeNotesInput need
 // the raw objects: id, feedback, totalPoints, sourceSubpath.
 const assignments = JSON.parse(readFileSync("grader/assignments.json", "utf8"));
 const aiActivities = assignments.filter(
-  (a) => a["ai-grading"] && !a.sourceSubpath && !a.namePrefix && (!onlyId || a.id === onlyId),
+  (a) => a["ai-grading"] && a.externalRepo !== false && !a.sourceSubpath && !a.namePrefix && (!onlyId || a.id === onlyId),
 );
 if (!aiActivities.length) {
-  console.error(onlyId ? `No external ai-grading activity ${onlyId} (ai-grading, no sourceSubpath, no namePrefix) in assignments.json.` : "No external ai-grading activities (ai-grading, no sourceSubpath, no namePrefix) in assignments.json.");
+  console.error(onlyId ? `No external ai-grading activity ${onlyId} (ai-grading, not externalRepo:false, no sourceSubpath, no namePrefix) in assignments.json.` : "No external ai-grading activities (ai-grading, not externalRepo:false, no sourceSubpath, no namePrefix) in assignments.json.");
   process.exit(1);
 }
 console.log(`Owner ${OWNER}, section ${section}, prefix ${WORKSPACE_PREFIX}`);
