@@ -136,7 +136,12 @@ const hasNote = new Set(existing.filter((r) => r.notes).map((r) => `${r.repo}|${
 
 const rows = [];
 const gradedThisRun = new Set();
-let cloned = 0, noProject = 0, cloneFail = 0;
+let cloned = 0, noProject = 0, cloneFail = 0, shallowFallback = 0;
+
+// Any selected activity declaring a `deliverable` needs that file's commit
+// history, which decides how we clone.
+const wantHistory = aiActivities.some((a) => a.deliverable);
+if (wantHistory) console.log("Cloning with full history (an activity declares a deliverable graded on its authoring history).");
 
 for (const ws of workspaces) {
   const proj = projectRepoFor(ws);
@@ -147,7 +152,19 @@ for (const ws of workspaces) {
     console.log(`  would clone ${proj.full} for ${ws}`);
   } else {
     try {
-      quiet(`gh repo clone ${proj.full} ${dir} -- -q --depth=1`);
+      // When an activity is graded partly on HOW its deliverable was written, a
+      // shallow clone throws away the evidence: depth 1 carries one commit and
+      // no dates. `--filter=blob:none` keeps the whole commit graph while still
+      // downloading only the blobs the checkout needs, so history costs little.
+      // If the server refuses a partial clone we fall back to the shallow one
+      // and the input file says the history is unavailable rather than implying
+      // the student made a single commit.
+      if (wantHistory) {
+        try { quiet(`gh repo clone ${proj.full} ${dir} -- -q --filter=blob:none`); }
+        catch { quiet(`gh repo clone ${proj.full} ${dir} -- -q --depth=1`); shallowFallback++; }
+      } else {
+        quiet(`gh repo clone ${proj.full} ${dir} -- -q --depth=1`);
+      }
       cloned++;
     } catch {
       cloneFail++;
@@ -168,6 +185,7 @@ for (const ws of workspaces) {
 }
 
 console.log(`\nCloned ${cloned}, no-project ${noProject}, clone-failed ${cloneFail}. ${rows.length} notes-input file(s) to write.`);
+if (shallowFallback) console.log(`${shallowFallback} clone(s) fell back to shallow - their authoring history is not in the input.`);
 
 if (dryRun) {
   console.log("Dry run - nothing cloned, no inputs written.");

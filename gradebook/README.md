@@ -110,6 +110,16 @@ for you to review.
   the increment report and documentation, `"journal"` for the reflection
   journal. It scopes AI feedback to that one workspace zone. Read only by the
   finals tools below, NOT by `loadPolicy` (which drops it).
+- `"deliverable": "<path>"` - names the ONE file the activity is graded from,
+  when that is narrower than "the repository" (the finals badge is graded from
+  `AI-USAGE.md`, not from the project code beside it). Two effects: the file is
+  pinned to the front of the AI's source list, so a large `src/` tree can never
+  push the graded file out of the character budget; and the input gains an
+  **Authoring history** section carrying that file's real commit dates, because
+  some activities are graded partly on whether a log was kept as the work
+  happened or assembled in one sitting. When the clone has no history the
+  section says so in as many words, and the rubric tells the marker to stay
+  silent rather than guess. Read by `loadPolicy` and by the finals tools.
 - Each AI-graded activity ships a **`RUBRIC.md`** (canonical copy in
   `grader/<id>/RUBRIC.md`, also placed in the activity repo for students; shape
   from `grader/RUBRIC-TEMPLATE.md`); the AI grounds its feedback and score in
@@ -131,7 +141,11 @@ score, never a student push):
 - `tools/grade-external-repos.mjs <section>` - reads each student's public
   project repo URL from their workspace `project/README.md`, clones it (public,
   no token). Grades activities that are `ai-grading` + no `sourceSubpath` + no
-  `namePrefix` (so the m4a4/m5a5 submission-repo capstones stay out).
+  `namePrefix` (so the m4a4/m5a5 submission-repo capstones stay out). When any
+  selected activity declares a `deliverable` it clones with `--filter=blob:none`
+  instead of `--depth=1`, which keeps the whole commit graph while still
+  fetching only the blobs the checkout needs. A server that refuses the partial
+  clone falls back to shallow, and the run prints how many fell back.
 
 Both need `GRADE_OWNER` + `WORKSPACE_PREFIX` env; dry-run first. The presentation
 (video + slides) is graded by hand - the AI cannot watch it.

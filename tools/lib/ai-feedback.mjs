@@ -91,7 +91,11 @@ function clipBody(body, cap = PER_FILE_CAP) {
 // student's submission and the rest of the workspace is instructor-owned
 // content). Empty subpath walks the whole clone, the original behaviour. Paths
 // in the output stay relative to that root so the drafter reads clean names.
-function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "") {
+// `pin` names one repo-relative file that MUST reach the marker: the activity's
+// declared deliverable. It bypasses the extension filter and sorts ahead of
+// everything else, because a badge graded from AI-USAGE.md is graded from
+// nothing at all when a large src/ tree eats the budget first.
+function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "", pin = "") {
   const skipDir = new Set(["node_modules", ".git", "dist", "build", "coverage", ".vite", "test", "tests", "__tests__"]);
   const keep = /\.(jsx?|tsx?|dart|css|scss|sass|html|py|md)$/i;     // code/markup + docs (README, HAUDEX.md, ...)
   const allowName = new Set(["package.json", "pubspec.yaml", "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.ts"]);
@@ -105,6 +109,7 @@ function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "") {
       const full = `${d}/${e.name}`;
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) { walk(full, r); continue; }
+      if (pin && r === pin) { cands.push({ r, full }); continue; } // the deliverable, whatever its extension
       if (e.name === "package-lock.json" || e.name === "student.json" || e.name === "RUBRIC.md") continue; // noise / PII / sent separately
       const named = allowName.has(e.name);
       if (!named && (!keep.test(e.name) || /\.(test|spec)\./i.test(e.name) || skipName.test(e.name))) continue;
@@ -112,8 +117,10 @@ function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "") {
     }
   };
   walk(subpath ? `${clone}/${String(subpath).replace(/\/+$/, "")}` : clone, "");
-  // student code first (src/ then shorter paths), so the cap keeps what matters
-  cands.sort((a, b) => (a.r.startsWith("src/") ? 0 : 1) - (b.r.startsWith("src/") ? 0 : 1) || a.r.localeCompare(b.r));
+  // the pinned deliverable first, then student code (src/, then shorter paths),
+  // so the cap keeps what matters
+  const rank = (r) => (pin && r === pin ? 0 : r.startsWith("src/") ? 1 : 2);
+  cands.sort((a, b) => rank(a.r) - rank(b.r) || a.r.localeCompare(b.r));
   const out = [];
   const omitted = [];
   let used = 0;
@@ -132,6 +139,44 @@ function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "") {
     out.push(`--- [not included: over the ${cap}-character source budget] ---\n${omitted.join("\n")}`);
   }
   return out.join("\n\n");
+}
+
+// The authoring history of the declared deliverable. Several activities are
+// graded partly on HOW a file was written rather than only on what it says: a
+// log kept across three weeks and a log pasted in one sitting the night before
+// read identically at HEAD and mean very different things. The marker cannot
+// infer this from the working tree, so we hand it the dates.
+//
+// A shallow clone has exactly one commit and no dates before it. When that is
+// what we have, say so in as many words - an unannounced absence reads as "the
+// student made one commit", which is a finding rather than a missing input.
+function authoringHistory(clone, rel) {
+  if (!rel || !existsSync(`${clone}/${rel}`)) return `\`${rel}\` is not present in the repository.`;
+  let shallow = false;
+  try { shallow = sh(`git -C ${clone} rev-parse --is-shallow-repository`) === "true"; } catch { return "History unavailable: this clone is not a git repository."; }
+  if (shallow) {
+    return [
+      "History unavailable: this is a shallow clone, so it carries one commit and no dates before it.",
+      "Do NOT read this as the student having made a single commit, and do not comment on the",
+      "authoring history at all - neither to the student nor in the instructor half.",
+    ].join(" ");
+  }
+  let log = "";
+  try { log = sh(`git -C ${clone} log --follow --date=short --format='%ad %h %s' -- ${rel}`); } catch { log = ""; }
+  if (!log) return `\`${rel}\` is present but has no commit history of its own (it may have arrived in the initial import).`;
+  const lines = log.split("\n");
+  const first = lines[lines.length - 1].slice(0, 10);
+  const last = lines[0].slice(0, 10);
+  return [
+    `\`${rel}\` has ${lines.length} commit(s), first ${first}, last ${last}.`,
+    "Judge whether this was kept as the work happened or assembled in one sitting, and report that",
+    "in the INSTRUCTOR half only, as an observation rather than an accusation. One commit is not by",
+    "itself misconduct; note it and move on.",
+    "",
+    "```",
+    ...lines,
+    "```",
+  ].join("\n");
 }
 
 // The grading rubric for this activity, used to ground design/quality feedback
@@ -308,7 +353,10 @@ function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
     shotRefs.length
       ? `## Screenshots (open these image files to judge the design)\nListed in the order they were captured. For an app they walk one flow (a screen, then the same app after a tap, some typing or a navigation), so read them as a sequence: two consecutive shots that look identical mean that interaction did not work, which is design evidence as much as it is behavior evidence.\n${shotRefs.map((r) => `- ${r}`).join("\n")}`
       : "## Screenshots\nNone attached; comment on code only.",
-    `## Student source\n${collectSourceFiles(clone, undefined, a.sourceSubpath)}`,
+    a.deliverable
+      ? `## Authoring history of the deliverable\n${authoringHistory(clone, a.deliverable)}`
+      : null,
+    `## Student source\n${collectSourceFiles(clone, undefined, a.sourceSubpath, a.deliverable || "")}`,
     `## Output format\n${outputFormat(a, shotRefs.length > 0)}`,
   ].filter(Boolean).join("\n\n");
 

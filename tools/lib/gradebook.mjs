@@ -140,6 +140,10 @@ export function loadPolicy(path = "grader/assignments.json") {
         type: a.type || null, submit: a.submit || null, content: a.content || null, title: a.title || null,
         // Exact live Canvas assignment name to adopt, when it carries no id token.
         canvasName: a.canvasName || null,
+        // The one file an activity is graded from, when that is narrower than
+        // "the repository". Pinned into the AI input and, where the clone has
+        // history, accompanied by that file's commit log.
+        deliverable: a.deliverable || null,
       });
     }
   } catch { /* no assignments.json - treat all as fully auto */ }
