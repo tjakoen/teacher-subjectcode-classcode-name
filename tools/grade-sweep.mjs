@@ -326,6 +326,21 @@ async function gradeVitest(dir, id, log) {
       if (t.status !== "passed") failures.push({ title: t.fullName || t.title || "(unnamed check)" });
     }
   }
+  // A test FILE that cannot be loaded (a syntax error in the student's source, a
+  // bad import) reports NO tests at all - vitest counts only what it collected.
+  // Left alone, the denominator shrinks to match the numerator and a repo that
+  // does not compile scores a flattering fraction: a 2240 m5a5 submission with an
+  // unterminated string literal recorded 6/6 against a class suite of 26, which
+  // reads as 100%. A false zero gets reported by the student within a day; this
+  // never does. Treat an unloadable suite exactly as a broken build is already
+  // treated a few lines above - it earns 0, because none of the graded checks ran.
+  const unloadable = (r.testResults ?? []).filter(
+    (f) => (f.assertionResults ?? []).length === 0 && f.status === "failed");
+  if (unloadable.length) {
+    log.push(`  UNLOADABLE: ${unloadable.length} test file(s) never ran (student code does not compile) - scoring 0 rather than a fraction of the files that survived`);
+    return { passed: 0, total: 0, malformed: true,
+      failures: unloadable.map((f) => ({ title: `test file failed to load: ${String(f.name || "").split("/").pop()}` })) };
+  }
   return { passed: r.numPassedTests ?? 0, total: r.numTotalTests ?? 0, failures };
 }
 
@@ -389,6 +404,32 @@ function parseStudent(text) {
     return { githubAccount: "", fullName: "", studentNumber: "", studentEmail: "", classCode: "" };
   }
 }
+
+// A submission whose student.json was never filled in yields a row with no
+// studentNumber, and a row with no studentNumber cannot be matched to a Canvas
+// student: the grade is real, recorded, and undeliverable. 28 such rows were
+// found across the estate on 2026-09-23. The same student's OTHER submissions
+// almost always carry the identity, and the handle at the tail of the repo name
+// is the join. provision-workspaces.mjs already falls back to the gradebook
+// identity this way for workspaces; this is the same fallback for submissions.
+// It never overrides a student.json that IS filled in.
+const repoTail = (name) => {
+  const m = canon(name).match(/^[a-z0-9]+-\d{4}-(.+)$/);
+  return m ? m[1] : null;
+};
+const identityFromSiblings = (repo) => {
+  const t = repoTail(repo);
+  if (!t) return null;
+  for (const r of rows) {
+    if (!r.studentNumber || repoTail(r.repo) !== t) continue;
+    return {
+      githubAccount: r.githubAccount || "", fullName: r.fullName || "",
+      studentNumber: r.studentNumber, studentEmail: r.studentEmail || "",
+      classCode: r.classCode || "",
+    };
+  }
+  return null;
+};
 
 // Read a student's identity from their student.json (if present in the clone).
 function readStudent(dir) {
@@ -470,7 +511,14 @@ async function gradeOne(a, repo, stale) {
   const sha =
     await shA(`git -C ${dir} log -1 --format=%H -- . ':!grades' ':!GRADES.md'`) ||
     await shA(`git -C ${dir} rev-parse HEAD`);
-  const stu = readStudent(dir);
+  let stu = readStudent(dir);
+  if (!stu.studentNumber) {
+    const sib = identityFromSiblings(repo);
+    if (sib) {
+      stu = sib;
+      log.push(`  identity: student.json is blank - took identity from this student's other submissions`);
+    }
+  }
   const alreadyGraded = seen.has(`${repo}|${a.id}`);
   // LOCKED assignment: a grade already recorded is frozen (re-submissions are
   // ignored). A student not yet graded can still be graded, but flagged late.
@@ -723,12 +771,29 @@ writeFileSync("gradebook/GRADEBOOK.md", md);
   const sec = String(section).toLowerCase();
   const claimedByAny = (name) => allAssignments.some(
     (a) => a.namePrefix && matchesActivity(name, a.namePrefix) && inSection(name));
+  // Handles of students known to THIS section, from the gradebook as it stands.
+  // Used to spot a repo filed under someone else's section number.
+  const myHandles = new Set();
+  for (const r of rows) if (r.githubAccount) myHandles.add(String(r.githubAccount).toLowerCase());
   const unmatched = [];
   for (const name of allRepos()) {
     const c = canon(name);
     if (INFRA.test(c) || claimedByAny(name) || !ACTIVITY.test(c)) continue;
     if (c.includes(`-${sec}-`)) unmatched.push([name, "names this section but matches no activity id"]);
     else if (!/-\d{4}(-|$)/.test(c)) unmatched.push([name, "has an activity id but no section in the name"]);
+    else {
+      // A repo carrying an activity id AND a four-digit section that is not ours
+      // used to fall through both branches above and be reported by NOBODY: this
+      // section skips it as another class's, and that other section never sees it
+      // because the number belongs to no real class (a typo) or to a class the
+      // student is not in. Three such repos were found by hand on 2026-09-23, all
+      // holding on-time work, one of them graded into the WRONG section's gradebook.
+      // The handle is the signal: if the tail names a student of THIS section, the
+      // section token is wrong, not the repo.
+      const m = c.match(/(?:^|-)(?:m\d+a\d+|prelim|midterm|q\d+)-(\d{4})-(.+)$/);
+      if (m && m[1] !== sec && myHandles.has(m[2]))
+        unmatched.push([name, `names section ${m[1]}, but \`${m[2]}\` is a student of THIS section - the section token looks typo'd`]);
+    }
   }
   const um = [
     `# Unmatched submission repos - section ${section}`,

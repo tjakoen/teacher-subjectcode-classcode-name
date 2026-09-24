@@ -60,6 +60,13 @@ export const normGh = (s) =>
 // must NOT swallow "Prelim Journal Submission" / "Prelim Exam - ..." etc.
 export const tokenToId = (label) => {
   const s = String(label).trim();
+  // Canvas names a duplicated assignment "<original> Copy" (then "Copy 2", ...).
+  // That still starts with the activity token, so it resolved to the SAME id as
+  // the real one and canvas-push planned a full set of writes into the phantom:
+  // a 2026-09-23 dry run on 2209 planned 35 grades into an unpublished "M4A1 Copy".
+  // No real activity is named this, and an instructor who genuinely wants to adopt
+  // such a name can still declare it as `canvasName`, which is checked first.
+  if (/\bcopy(\s+\d+)?\s*$/i.test(s)) return null;
   const m = s.match(/^\s*(m\d+a\d+|q\d+)\b/i);
   if (m) return m[1].toLowerCase();
   const lc = s.toLowerCase();

@@ -62,7 +62,14 @@ for (const repo of repos) {
 }
 if (uncertain.length) console.log(`WARN: could not confirm ${uncertain.length} repo(s) after retries - skipping (not pruning): ${uncertain.join(", ")}`);
 
-const dead = rows.filter((r) => exists.get(r.repo) === false);
+// A row with no sha was never produced by a grading run: it is a SYNTHETIC held
+// row, seeded so a Canvas-only activity (e.g. a url/manual one flipped to
+// ai-grading) shows up in the Console review lane at all. No repo was ever meant
+// to exist for it, so the existence check returns a truthful 404 and would drop
+// the entire review lane. A genuinely graded row always carries a sha.
+const synthetic = rows.filter((r) => !r.sha);
+if (synthetic.length) console.log(`Skipping ${synthetic.length} synthetic row(s) with no sha (held review-lane rows, no repo expected).`);
+const dead = rows.filter((r) => r.sha && exists.get(r.repo) === false);
 console.log(`prune-gradebook: ${rows.length} rows, ${repos.length} repos, owner ${OWNER}`);
 if (!dead.length) { console.log("No rows reference a missing repo. Gradebook is clean."); process.exit(0); }
 
