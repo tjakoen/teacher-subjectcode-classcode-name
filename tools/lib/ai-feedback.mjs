@@ -86,6 +86,35 @@ function clipBody(body, cap = PER_FILE_CAP) {
   return `${body.slice(0, head)}\n\n...[${dropped} characters omitted from the middle of this file]\n\n${body.slice(-tail)}`;
 }
 
+// Students hand in finals reports and journals as PDF and Word files as often
+// as Markdown. Before 2026-10-01 those never reached the candidate list at all,
+// not even the "not included" footer, so a report submitted as a PDF read to
+// the marker as a report never written. Extract the text where a local tool can
+// (pdftotext, then python's pypdf; Office files are zips of XML that unzip
+// reads), and return null when nothing usable came out (a scanned PDF, a
+// password, no extractor installed) so the caller names the file as unreadable.
+const DOC_EXT = /\.(pdf|docx|pptx|odt|odp)$/i;
+const OPAQUE_EXT = /\.(doc|ppt|xls|xlsx|rtf|pages|key|numbers|png|jpe?g|gif|webp|heic|zip)$/i;
+function extractDocText(full) {
+  const qf = `'${full.replace(/'/g, `'\\''`)}'`;
+  const tryCmd = (cmd) => { try { return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 5e7 }); } catch { return ""; } };
+  let text = "";
+  if (/\.pdf$/i.test(full)) {
+    text = tryCmd(`pdftotext -layout -q ${qf} -`);
+    if (!text.trim()) text = tryCmd(`python3 -c "import sys,pypdf; print('\\n'.join((p.extract_text() or '') for p in pypdf.PdfReader(sys.argv[1]).pages))" ${qf}`);
+  } else {
+    const member = /\.docx$/i.test(full) ? "word/document.xml" : /\.pptx$/i.test(full) ? "ppt/slides/slide*.xml" : "content.xml";
+    const xml = tryCmd(`unzip -p ${qf} '${member}'`);
+    text = xml
+      .replace(/<\/(w:p|a:p|text:p|text:h)>/g, "\n")
+      .replace(/<(w:tab|text:tab)\/>/g, "\t")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+  }
+  text = text.replace(/\f/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return text.replace(/\s/g, "").length >= 40 ? text : null;
+}
+
 // subpath scopes the walk to one folder of the clone (e.g. "project" or
 // "journal" for a workspace-based deliverable, where only that zone is the
 // student's submission and the rest of the workspace is instructor-owned
@@ -95,12 +124,18 @@ function clipBody(body, cap = PER_FILE_CAP) {
 // declared deliverable. It bypasses the extension filter and sorts ahead of
 // everything else, because a badge graded from AI-USAGE.md is graded from
 // nothing at all when a large src/ tree eats the budget first.
-function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "", pin = "") {
+// `scoped` says the whole clone is already one submission (a snapshot of the
+// file or folder the student linked), which makes opaque files worth naming.
+function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "", pin = "", scoped = false) {
+  // pin may be a list, in priority order (a finals documentation row pins the
+  // linked file, then README.md); an empty entry pins nothing.
+  const pins = (Array.isArray(pin) ? pin : [pin]).filter(Boolean);
   const skipDir = new Set(["node_modules", ".git", "dist", "build", "coverage", ".vite", "test", "tests", "__tests__"]);
-  const keep = /\.(jsx?|tsx?|dart|css|scss|sass|html|py|md)$/i;     // code/markup + docs (README, HAUDEX.md, ...)
+  const keep = /\.(jsx?|tsx?|dart|css|scss|sass|html|py|md|txt)$/i; // code/markup + docs (README, HAUDEX.md, ...)
   const allowName = new Set(["package.json", "pubspec.yaml", "tailwind.config.js", "tailwind.config.cjs", "tailwind.config.ts"]);
   const skipName = /^(vite|vitest|eslint|prettier|babel|rollup)\b|\.config\.[cm]?[jt]s$/i; // build/lint boilerplate
   const cands = [];
+  const unreadable = [];
   const walk = (d, rel) => {
     let entries = [];
     try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
@@ -109,8 +144,15 @@ function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "", pin = "") {
       const full = `${d}/${e.name}`;
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) { walk(full, r); continue; }
-      if (pin && r === pin) { cands.push({ r, full }); continue; } // the deliverable, whatever its extension
+      if (pins.includes(r)) { cands.push({ r, full, doc: DOC_EXT.test(e.name) }); continue; } // the deliverable, whatever its extension
       if (e.name === "package-lock.json" || e.name === "student.json" || e.name === "RUBRIC.md") continue; // noise / PII / sent separately
+      // Documents and opaque files only count in a scoped walk (a finals zone,
+      // a linked folder, a student's own project repo), where every file is the
+      // student's submission. In an ordinary sweep clone a PDF is as likely to
+      // be lesson material shipped with the template, and the images are fonts
+      // and assets; reading or naming them there would be noise or worse.
+      if (DOC_EXT.test(e.name)) { if (subpath || scoped) cands.push({ r, full, doc: true }); continue; }
+      if (OPAQUE_EXT.test(e.name)) { if (subpath || scoped) unreadable.push(r); continue; }
       const named = allowName.has(e.name);
       if (!named && (!keep.test(e.name) || /\.(test|spec)\./i.test(e.name) || skipName.test(e.name))) continue;
       cands.push({ r, full });
@@ -119,25 +161,39 @@ function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "", pin = "") {
   walk(subpath ? `${clone}/${String(subpath).replace(/\/+$/, "")}` : clone, "");
   // the pinned deliverable first, then student code (src/, then shorter paths),
   // so the cap keeps what matters
-  const rank = (r) => (pin && r === pin ? 0 : r.startsWith("src/") ? 1 : 2);
+  const rank = (r) => (pins.includes(r) ? pins.indexOf(r) : pins.length + (r.startsWith("src/") ? 0 : 1));
   cands.sort((a, b) => rank(a.r) - rank(b.r) || a.r.localeCompare(b.r));
   const out = [];
   const omitted = [];
   let used = 0;
-  for (const { r, full } of cands) {
+  for (const { r, full, doc } of cands) {
     let body = "";
-    try { body = readFileSync(full, "utf8"); } catch { continue; }
+    let label = r;
+    if (doc) {
+      const text = extractDocText(full);
+      if (text == null) { unreadable.push(r); continue; }
+      body = text;
+      label = `${r} (text extracted from the file; layout, images and tables are lost)`;
+    } else {
+      try { body = readFileSync(full, "utf8"); } catch { continue; }
+    }
     body = clipBody(body);
     // A file that does not fit is skipped rather than cut short, so the files
     // that DO make it are whole. Record it: an unannounced omission reads to the
     // drafter as "the student never wrote this", which is a different verdict.
     if (used + body.length > cap) { omitted.push(r); continue; }
     used += body.length;
-    out.push(`--- ${r} ---\n${body}`);
+    out.push(`--- ${label} ---\n${body}`);
   }
   if (omitted.length) {
     out.push(`--- [not included: over the ${cap}-character source budget] ---\n${omitted.join("\n")}`);
   }
+  // Named, never silently dropped: a file the student handed in that could not
+  // be read as text is still work they handed in.
+  if (unreadable.length) {
+    out.push(`--- [present but NOT readable as text: the instructor must open these by hand; do not treat their content as missing] ---\n${unreadable.join("\n")}`);
+  }
+  if (!out.length) return "(no files found at this location)";
   return out.join("\n\n");
 }
 
@@ -150,8 +206,13 @@ function collectSourceFiles(clone, cap = TOTAL_CAP, subpath = "", pin = "") {
 // A shallow clone has exactly one commit and no dates before it. When that is
 // what we have, say so in as many words - an unannounced absence reads as "the
 // student made one commit", which is a finding rather than a missing input.
-function authoringHistory(clone, rel) {
+// `repo` is the git repository to read the log from and `rev` the commit to
+// stop at; both default to the clone itself at HEAD. A finals row graded from a
+// snapshot at the deadline passes the full clone and the cutoff commit, so the
+// history the marker sees ends where the graded state does.
+function authoringHistory(clone, rel, repo = clone, rev = "") {
   if (!rel || !existsSync(`${clone}/${rel}`)) return `\`${rel}\` is not present in the repository.`;
+  clone = repo;
   let shallow = false;
   try { shallow = sh(`git -C ${clone} rev-parse --is-shallow-repository`) === "true"; } catch { return "History unavailable: this clone is not a git repository."; }
   if (shallow) {
@@ -162,7 +223,7 @@ function authoringHistory(clone, rel) {
     ].join(" ");
   }
   let log = "";
-  try { log = sh(`git -C ${clone} log --follow --date=short --format='%ad %h %s' -- ${rel}`); } catch { log = ""; }
+  try { log = sh(`git -C ${clone} log --follow --date=short --format='%ad %h %s' ${rev} -- '${rel.replace(/'/g, `'\\''`)}'`); } catch { log = ""; }
   if (!log) return `\`${rel}\` is present but has no commit history of its own (it may have arrived in the initial import).`;
   const lines = log.split("\n");
   const first = lines[lines.length - 1].slice(0, 10);
@@ -183,8 +244,10 @@ function authoringHistory(clone, rel) {
 // and the proposed score. Prefer the copy in the student's submission (clone);
 // fall back to the canonical grader/<id>/RUBRIC.md (overlaid into every clone,
 // so this resolves even for repos created before RUBRIC.md existed).
-function collectRubric(clone, a) {
-  for (const p of [`${clone}/RUBRIC.md`, `grader/${a.id}/RUBRIC.md`]) {
+// A row resolved from a student's own link reads the canonical copy only: the
+// linked tree is theirs, and a RUBRIC.md in it is not the instructor's rubric.
+function collectRubric(clone, a, canonicalOnly = false) {
+  for (const p of [canonicalOnly ? null : `${clone}/RUBRIC.md`, `grader/${a.id}/RUBRIC.md`].filter(Boolean)) {
     try { const s = readFileSync(p, "utf8").trim(); if (s) return s; } catch { /* next */ }
   }
   return "";
@@ -296,11 +359,19 @@ function outputFormat(a, hasShots) {
 // <repo>.shots/ folder and referencing them by path (so a Claude Code session
 // can open the images to judge design). Everything the old model call received
 // travels here; the Course Console prompt turns it into the note.
+// A row may carry its own source (the finals tools resolve each student's
+// Canvas link to a snapshot): row.clone is the tree to read, row.sourceSubpath
+// and row.pin replace the activity's sourceSubpath / deliverable, row.scoped
+// marks the tree as wholly the student's submission, row.sourceNote tells the
+// marker where it came from, and row.historyRepo / row.historyRev point the
+// authoring history at the full clone and the graded commit.
 function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
-  const clone = `${work}/${row.repo}`;
+  const clone = row.clone || `${work}/${row.repo}`;
+  const subpath = row.clone ? (row.sourceSubpath || "") : a.sourceSubpath;
+  const pin = row.pin != null ? row.pin : (a.deliverable || "");
   const total = Number.isFinite(+a.totalPoints) ? +a.totalPoints : 100;
   const shots = collectScreenshots(row, a, work, previewDir);
-  const rubric = collectRubric(clone, a);
+  const rubric = collectRubric(clone, a, !!row.clone);
   const declares = stylingDeclared(row);
   const failList = (row.failures || []).map((f) => `- ${f.title}`).join("\n");
 
@@ -353,10 +424,11 @@ function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
     shotRefs.length
       ? `## Screenshots (open these image files to judge the design)\nListed in the order they were captured. For an app they walk one flow (a screen, then the same app after a tap, some typing or a navigation), so read them as a sequence: two consecutive shots that look identical mean that interaction did not work, which is design evidence as much as it is behavior evidence.\n${shotRefs.map((r) => `- ${r}`).join("\n")}`
       : "## Screenshots\nNone attached; comment on code only.",
+    row.sourceNote ? `## Where this submission was read from\n${row.sourceNote}` : null,
     a.deliverable
-      ? `## Authoring history of the deliverable\n${authoringHistory(clone, a.deliverable)}`
+      ? `## Authoring history of the deliverable\n${authoringHistory(clone, (Array.isArray(pin) ? pin[0] : pin) || a.deliverable, row.historyRepo || clone, row.historyRev || "")}`
       : null,
-    `## Student source\n${collectSourceFiles(clone, undefined, a.sourceSubpath, a.deliverable || "")}`,
+    `## Student source\n${collectSourceFiles(clone, undefined, subpath, pin, !!row.scoped)}`,
     `## Output format\n${outputFormat(a, shotRefs.length > 0)}`,
   ].filter(Boolean).join("\n\n");
 
@@ -381,8 +453,9 @@ export async function runNotesPass(rows, assignments, gradedThisRun, ctx = {}) {
   // else) has no clone and would silently produce an input whose "Student
   // source" section is EMPTY - and a feedback draft written from that judges no
   // code at all. Only write for rows we actually have a working tree for.
-  const todo = candidates.filter((r) => existsSync(`${work}/${r.repo}`));
-  const noClone = candidates.filter((r) => !existsSync(`${work}/${r.repo}`));
+  const treeOf = (r) => r.clone || `${work}/${r.repo}`;
+  const todo = candidates.filter((r) => existsSync(treeOf(r)));
+  const noClone = candidates.filter((r) => !existsSync(treeOf(r)));
   if (noClone.length) {
     console.log(`\nai feedback: ${noClone.length} row(s) still need a note but were not cloned this run - NOT writing a sourceless input for them.`);
     console.log(`  re-run with --force --only=<id> so they are cloned: ${[...new Set(noClone.map((r) => r.assignment))].sort().join(", ")}`);
