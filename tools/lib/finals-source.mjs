@@ -65,33 +65,54 @@ export async function canvasSubmissionLinks({ activities, workspaces, rows, sect
     if (id && wanted.has(id) && !byOurId.has(id)) byOurId.set(id, ca);
   }
 
-  // One synthetic row per workspace, carrying its student.json identity, joined
-  // into the real gradebook rows so a workspace inherits the identity its
-  // owner's submission repos already carry (the repo-stem bridge).
-  const wsRows = workspaces.map((w) => ({ repo: w.name, assignment: "", num: w.num || "", email: w.email || "", github: "", name: "", gradedAt: "" }));
-  const groups = consolidate([...rows, ...wsRows], section);
-  const { pairs, unmatched } = matchGroups(groups, students, {
-    sisOf: (s) => s.sis_user_id || "",
-    loginOf: (s) => s.login_id || s.email || "",
-    nameOf: (s) => s.name,
-  });
-  const wsNames = new Set(workspaces.map((w) => w.name));
+  // A workspace's OWN student.json is the first join: matched alone, it cannot
+  // be polluted by anyone else's rows. Only a workspace with no usable identity
+  // of its own borrows one from the gradebook, through the repo-stem bridge
+  // canvas-push uses. The order matters: on 2026-10-02 the gradebook union-find
+  // chained three 2240 students into one group (a shared key on some row is
+  // transitive), which put two workspaces on one Canvas student and dropped a
+  // third student's six submissions, while each student.json alone matched the
+  // right person.
+  const opts = { sisOf: (s) => s.sis_user_id || "", loginOf: (s) => s.login_id || s.email || "", nameOf: (s) => s.name };
+  const synth = (w) => ({ repo: w.name, assignment: "", num: w.num || "", email: w.email || "", github: "", name: "", gradedAt: "" });
   const studentOfWs = new Map();
-  const ambiguous = [];
-  for (const { group, student } of pairs) {
-    const mine = [...new Set(group.rows.map((r) => r.repo).filter((r) => wsNames.has(r)))];
-    if (mine.length > 1) { ambiguous.push(...mine); continue; }
-    if (mine.length === 1) studentOfWs.set(mine[0], student.id);
+  const via = new Map();
+  const needBridge = [];
+  for (const w of workspaces) {
+    if (!w.num && !w.email) { needBridge.push(w); continue; }
+    const { pairs } = matchGroups(consolidate([synth(w)], section), students, opts);
+    if (pairs[0]) { studentOfWs.set(w.name, pairs[0].student.id); via.set(w.name, "own student.json"); }
+    else needBridge.push(w);
   }
-  const unmatchedWs = [
-    ...ambiguous.map((w) => ({ ws: w, reason: "two workspaces joined to one Canvas student" })),
-    ...unmatched.flatMap((u) => u.group.rows.filter((r) => wsNames.has(r.repo)).map((r) => ({ ws: r.repo, reason: u.reason }))),
-  ];
+  const unmatchedWs = [];
+  if (needBridge.length) {
+    const wsNames = new Set(needBridge.map((w) => w.name));
+    const groups = consolidate([...rows, ...needBridge.map(synth)], section);
+    const { pairs, unmatched } = matchGroups(groups, students, opts);
+    for (const { group, student } of pairs) {
+      const mine = [...new Set(group.rows.map((r) => r.repo).filter((r) => wsNames.has(r)))];
+      if (mine.length > 1) { unmatchedWs.push(...mine.map((m) => ({ ws: m, reason: "two workspaces joined to one Canvas student through the gradebook" }))); continue; }
+      if (mine.length === 1) { studentOfWs.set(mine[0], student.id); via.set(mine[0], "gradebook bridge"); }
+    }
+    for (const u of unmatched) for (const r of u.group.rows) if (wsNames.has(r.repo)) unmatchedWs.push({ ws: r.repo, reason: u.reason });
+    for (const w of needBridge) if (!studentOfWs.has(w.name) && !unmatchedWs.some((u) => u.ws === w.name)) unmatchedWs.push({ ws: w.name, reason: (w.num || w.email) ? "student.json matches no Canvas student" : "no identity in student.json and no gradebook bridge" });
+  }
+  // Two workspaces on one student is ambiguous whichever join produced it.
+  const byStudent = new Map();
+  for (const [ws, uid] of studentOfWs) byStudent.set(uid, [...(byStudent.get(uid) || []), ws]);
+  for (const [, list] of byStudent) if (list.length > 1) for (const ws of list) { studentOfWs.delete(ws); unmatchedWs.push({ ws, reason: `shares one Canvas student with ${list.filter((x) => x !== ws).join(", ")}` }); }
+  const joinedStudents = new Set(studentOfWs.values());
 
   const links = new Map();
+  const orphans = [];
   for (const [id, ca] of byOurId) {
     const subs = await canvasGetAll(base, token, `/courses/${courseId}/assignments/${ca.id}/submissions`);
     const byUser = new Map(subs.map((s) => [s.user_id, s]));
+    for (const s of subs) {
+      if (s.workflow_state === "unsubmitted" || !s.submitted_at || joinedStudents.has(s.user_id)) continue;
+      const st = students.find((x) => x.id === s.user_id);
+      orphans.push({ id, user: st ? st.name : `Canvas user ${s.user_id}`, url: s.url || "" });
+    }
     for (const [ws, uid] of studentOfWs) {
       const s = byUser.get(uid);
       const dueAt = s?.cached_due_date || ca.due_at || null;
@@ -110,6 +131,8 @@ export async function canvasSubmissionLinks({ activities, workspaces, rows, sect
   }
   return {
     links,
+    via,
+    orphans,
     unmatched: unmatchedWs,
     missingAssignments: activities.map((a) => a.id).filter((id) => !byOurId.has(id)),
   };
@@ -132,6 +155,16 @@ export function parseGithubUrl(url) {
     // from another button, and students paste whatever was in the address bar.
     if (["blob", "tree", "edit", "blame", "raw"].includes(kind) && ref) return { owner, repo, ref, path: rest.join("/"), kind: kind === "tree" ? "tree" : "blob" };
     return { owner, repo, ref: null, path: "", kind: "root" };
+  }
+  // GitHub Pages: <owner>.github.io/<repo>/<path> is served from <owner>/<repo>
+  // (a bare <owner>.github.io is the <owner>.github.io repo). Students paste
+  // the rendered page as often as the source; the source is what is graded.
+  const pages = u.hostname.match(/^([\w-]+)\.github\.io$/i);
+  if (pages) {
+    const owner = pages[1];
+    if (!parts.length) return { owner, repo: `${owner}.github.io`, ref: null, path: "", kind: "root", pages: true };
+    const [repo, ...rest] = parts;
+    return { owner, repo, ref: null, path: rest.join("/"), kind: rest.length ? "blob" : "root", pages: true };
   }
   if (/^raw\.githubusercontent\.com$/i.test(u.hostname) && parts.length >= 4) {
     const [owner, repo, ref, ...rest] = parts;
@@ -259,7 +292,28 @@ export function resolveFinalsRow({ ws, a, sub, owner, prefix, cache, work, fallb
   const reasons = [];
   let target = null; // { full, path, ref, label, scoped }
 
-  if (!link) {
+  const gdoc = (link.match(/^https?:\/\/docs\.google\.com\/document\/d\/([\w-]{20,})/) || [])[1];
+  if (gdoc) {
+    // A Google Doc has no commit history, so it is read as it stands now. Only a
+    // doc shared by link exports without signing in.
+    const dest = `${work}/_rows/${a.id}/${ws}`;
+    if (dryRun) return { row: { repo: ws, assignment: a.id }, via: "link", kind: "planned", target: "google-doc", reasons: [] };
+    rmSync(dest, { recursive: true, force: true }); mkdirSync(dest, { recursive: true });
+    let text = "";
+    try { text = sh(`curl -sfL --max-time 30 ${q(`https://docs.google.com/document/d/${gdoc}/export?format=txt`)}`); } catch { text = ""; }
+    if (text.replace(/\s/g, "").length >= 40 && !/<html/i.test(text.slice(0, 200))) {
+      writeFileSync(`${dest}/google-doc.txt`, text + "\n");
+      return {
+        row: {
+          repo: ws, assignment: a.id, score: 0, passed: 0, total: 1, failures: [], notes: "", aiScore: "",
+          clone: dest, sourceSubpath: "", pin: "google-doc.txt", scoped: true,
+          sourceNote: sourceNote({ link, submittedAt: sub?.submittedAt, dueAt: sub?.dueAt, late: sub?.late, gradedFrom: "the linked Google Doc, exported as text NOW (it has no commit history, so edits after the deadline cannot be excluded; formatting and images are lost)", reason: "Say in the instructor half that the instructor should check the document's version history against the deadline." }),
+        },
+        via: "link", kind: "file", target: "google-doc", reasons: ["Google Doc read at its current state."],
+      };
+    }
+    reasons.push("The submitted link is a Google Doc that is not shared by link (or is empty), so it could not be read. The instructor must open it by hand.");
+  } else if (!link) {
     reasons.push(sub?.submittedAt ? `The Canvas submission is a ${sub.submissionType || "non-link"} submission, not a link.` : "No link in Canvas.");
   } else if (!L) {
     let host = "";
@@ -278,7 +332,7 @@ export function resolveFinalsRow({ ws, a, sub, owner, prefix, cache, work, fallb
         target = { full: `${owner}/${ws}`, path: L.path, ref: L.ref, label: `the linked \`${L.path}\` in the student's workspace`, scoped: true };
         reasons.push(`The link is inside the instructor's \`content/\` folder but is not an unchanged course file, so it is graded as the student's own work.`);
       } else {
-        target = { full: `${owner}/${ws}`, path: L.path, ref: L.ref, label: `the linked \`${L.path}\` in the student's workspace`, scoped: true };
+        target = { full: `${owner}/${ws}`, path: L.path, ref: L.ref, pages: L.pages, label: `the linked \`${L.path}\` in the student's workspace`, scoped: true };
         if (a.sourceSubpath && top !== a.sourceSubpath) reasons.push(`The link is in \`${top}/\` while this activity's usual place is \`${a.sourceSubpath}/\`; graded from the link.`);
       }
     } else if (prefix && repoLc.startsWith(prefix.toLowerCase())) {
@@ -300,13 +354,22 @@ export function resolveFinalsRow({ ws, a, sub, owner, prefix, cache, work, fallb
       target = { full: `${owner}/${L.repo}`, path: L.path, ref: L.ref, label: `\`${L.path || "the repository root"}\` of the course repository ${L.repo}`, scoped: !!L.path };
     }
   } else {
-    target = { full: `${L.owner}/${L.repo}`, path: L.path, ref: L.ref, label: L.path ? `the linked \`${L.path}\` in the student's own repository ${L.owner}/${L.repo}` : `the student's own repository ${L.owner}/${L.repo}`, scoped: !!L.path };
+    target = { full: `${L.owner}/${L.repo}`, path: L.path, ref: L.ref, pages: L.pages, label: L.path ? `the linked \`${L.path}\` in the student's own repository ${L.owner}/${L.repo}` : `the student's own repository ${L.owner}/${L.repo}`, scoped: !!L.path };
   }
 
   const dest = `${work}/_rows/${a.id}/${ws}`;
   const attempt = (t) => {
     if (dryRun) return { kind: "planned" };
     let snap = snapshot(cache, t.full, { ref: t.ref, path: t.path, cutoff }, dest);
+    // A Pages URL names the rendered page: foo.html may be built from foo.md,
+    // and a folder URL from its index.
+    if (snap.kind === "missing" && t.pages && t.path) {
+      for (const alt of [t.path.replace(/\.html?$/i, ".md"), t.path.replace(/\/?$/, "/index.html"), t.path.replace(/\/?$/, "/README.md")]) {
+        if (alt === t.path) continue;
+        const s2 = snapshot(cache, t.full, { ref: t.ref, path: alt, cutoff }, dest);
+        if (s2.kind !== "missing") { snap = s2; t.path = alt; break; }
+      }
+    }
     if (snap.kind === "missing" && cutoff) {
       // Not there at the deadline: look at the latest state, and say it is late.
       const later = snapshot(cache, t.full, { ref: t.ref, path: t.path, cutoff: null }, dest);
@@ -429,11 +492,12 @@ export async function runFinalsTool({ tool, work, select, fallback, describe }) 
   try { existing = loadGradebook("gradebook/grades.csv", section).rows; } catch { existing = []; }
   const hasNote = new Set(existing.filter((r) => r.notes).map((r) => `${r.repo}|${r.assignment}`));
 
-  let links = new Map(), unmatched = [], missingAssignments = [];
+  let links = new Map(), unmatched = [], missingAssignments = [], orphans = [];
   if (!zoneOnly) {
     const ids = workspaces.map((w) => workspaceIdentity(OWNER, w));
-    ({ links, unmatched, missingAssignments } = await canvasSubmissionLinks({ activities, workspaces: ids, rows: existing, section, policy: loadPolicy() }));
+    ({ links, unmatched, missingAssignments, orphans } = await canvasSubmissionLinks({ activities, workspaces: ids, rows: existing, section, policy: loadPolicy() }));
     console.log(`Canvas: ${links.size} (workspace, activity) pair(s) joined; ${unmatched.length} workspace(s) not joined to a Canvas student.`);
+    if (orphans.length) console.log(`  ${orphans.length} Canvas submission(s) belong to a student joined to NO workspace: NOT drafted, see the report.`);
     if (missingAssignments.length) console.log(`  no Canvas assignment found for: ${missingAssignments.join(", ")} (those rows use the fallback)`);
   }
   const unmatchedWs = new Set(unmatched.map((u) => u.ws));
@@ -473,6 +537,7 @@ export async function runFinalsTool({ tool, work, select, fallback, describe }) 
     "",
     zoneOnly ? "**--zone-only: Canvas links were NOT read; every row is the fallback.**\n" : "",
     unmatched.length ? `## Workspaces not joined to a Canvas student (${unmatched.length})\n\nTheir rows use the fallback. Fix the identity (student.json) before trusting them.\n\n${unmatched.map((u) => `- ${u.ws}: ${u.reason}`).join("\n")}\n` : "",
+    orphans.length ? `## Canvas submissions with no workspace, NOT drafted (${orphans.length})\n\nThe student submitted in Canvas but no workspace joined to them, so their work was never read. Fix the identity, then re-run.\n\n${orphans.map((o) => `- ${o.id} ${o.user}: ${o.url || "(no link)"}`).join("\n")}\n` : "",
     skipped.length ? `## Held back, NOT drafted (${skipped.length})\n\n${skipped.map((x) => `- ${x.id} ${x.ws}: ${x.reason}`).join("\n")}\n` : "",
     "## Resolved rows",
     "",

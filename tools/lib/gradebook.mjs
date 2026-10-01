@@ -192,6 +192,15 @@ export function loadGradebook(path = "gradebook/grades.csv", sectionArg = null) 
 // a normalized email, or a github account (a repo stem shares the github
 // namespace so a blank-identity quiz row joins its owner's sibling rows).
 // Returns an array of { rows, nums:Set, emails:Set, name, scores:Map }.
+// A student number is 7 to 9 digits here. A shorter value in the number field
+// is something else typed into it (a class code, a PC number), and because the
+// union below is transitive, one such value shared by two students merges their
+// whole records: on 2026-10-02 a 4-digit entry on one row each put two 2240
+// students into one grade group, so canvas-push delivered both to one of them.
+// Such a value is never used as a join key; the row still joins its owner
+// through its email and its repo stem.
+const joinNum = (s) => { const n = normNum(s); return n.replace(/\D/g, "").length >= 6 ? n : ""; };
+
 export function consolidate(rows, section) {
   const parent = rows.map((_, i) => i);
   const find = (x) => (parent[x] === x ? x : (parent[x] = find(parent[x])));
@@ -199,7 +208,7 @@ export function consolidate(rows, section) {
   const keyOwner = new Map();
   const keysFor = (r) => {
     const ks = [];
-    if (normNum(r.num)) ks.push("num:" + normNum(r.num));
+    if (joinNum(r.num)) ks.push("num:" + joinNum(r.num));
     if (normEmail(r.email)) ks.push("em:" + normEmail(r.email));
     if (normGh(r.github)) ks.push("gh:" + normGh(r.github));
     const stem = repoStem(r.repo, section);
@@ -218,7 +227,7 @@ export function consolidate(rows, section) {
     if (!byRoot.has(root)) byRoot.set(root, { rows: [], nums: new Set(), emails: new Set(), name: "" });
     const g = byRoot.get(root);
     g.rows.push(r);
-    if (normNum(r.num)) g.nums.add(normNum(r.num));
+    if (joinNum(r.num)) g.nums.add(joinNum(r.num));
     if (normEmail(r.email)) g.emails.add(normEmail(r.email));
     if (r.name && !g.name) g.name = r.name;
   });

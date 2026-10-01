@@ -22,7 +22,18 @@
 // CANVAS_TOKEN / CANVAS_COURSE_ID to read the submitted links (not needed with
 // --zone-only).
 
+import { execSync } from "node:child_process";
 import { runFinalsTool } from "./lib/finals-source.mjs";
+
+// Does this workspace hold any file under `zone`? A zone left empty is not
+// proof of no work: a 2134 student kept the week 1 journal under
+// project/Journal/ and linked nothing, so a journal-only fallback read their
+// journal as missing.
+const zoneHasFiles = (owner, ws, zone) => {
+  try { return execSync(`gh api 'repos/${owner}/${ws}/contents/${zone}' -q 'length'`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() !== "0"; }
+  catch { return false; }
+};
+const STUDENT_ZONES = ["project", "journal"];
 
 await runFinalsTool({
   tool: "grade-workspace-docs",
@@ -31,6 +42,13 @@ await runFinalsTool({
   // ai-grading AND a sourceSubpath: the subpath is what separates these from
   // the external project (ai-grading, no subpath), graded by the other tool.
   select: (a) => a["ai-grading"] && a.sourceSubpath,
-  // No usable link: the activity's zone in the student's workspace.
-  fallback: ({ ws, a, owner }) => ({ full: `${owner}/${ws}`, path: a.sourceSubpath, label: `the workspace \`${a.sourceSubpath}/\` folder`, scoped: true }),
+  // No usable link: the activity's zone in the student's workspace, or, when
+  // that zone is empty, the student's other zone, labelled so the marker knows
+  // to look for this activity's file among other work.
+  fallback: ({ ws, a, owner }) => {
+    if (zoneHasFiles(owner, ws, a.sourceSubpath)) return { full: `${owner}/${ws}`, path: a.sourceSubpath, label: `the workspace \`${a.sourceSubpath}/\` folder`, scoped: true };
+    const other = STUDENT_ZONES.find((z) => z !== a.sourceSubpath && zoneHasFiles(owner, ws, z));
+    if (other) return { full: `${owner}/${ws}`, path: other, label: `the workspace \`${other}/\` folder, because \`${a.sourceSubpath}/\` is empty (look there for this activity's file among the student's other work, and HOLD if it is not there)`, scoped: true };
+    return { full: `${owner}/${ws}`, path: a.sourceSubpath, label: `the workspace \`${a.sourceSubpath}/\` folder`, scoped: true };
+  },
 });
