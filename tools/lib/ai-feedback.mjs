@@ -16,7 +16,7 @@
 // input file (the persona + hard rules below) so a class cannot edit them away
 // and the "story" cannot drift.
 
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 
 const sh = (cmd) => execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -373,6 +373,7 @@ function outputFormat(a, hasShots) {
 function collectDocImages(clone) {
   const IMG = /\.(png|jpe?g|gif|webp)$/i;
   const found = [];
+  const remote = [];
   const add = (full, name) => { if (found.length < MAX_FLOW_IMAGES && !found.some((f) => f.full === full) && existsSync(full)) found.push({ full, name }); };
   const walk = (d, rel, fn) => {
     let es = [];
@@ -389,7 +390,22 @@ function collectDocImages(clone) {
     try { md = readFileSync(full, "utf8"); } catch { return; }
     const dir = full.slice(0, full.lastIndexOf("/"));
     for (const m of md.matchAll(/!\[[^\]]*\]\(\s*<?([^)>\s]+)>?[^)]*\)|<img[^>]+src=["']([^"']+)["']/gi)) {
-      let ref = (m[1] || m[2] || "").split("#")[0].split("?")[0];
+      const raw = (m[1] || m[2] || "").trim();
+      // Images dragged into a GitHub README become user-attachments URLs with
+      // no extension, so a local-only reader saw no screenshots at all.
+      if (/^https?:\/\//i.test(raw) && (IMG.test(raw.split("?")[0]) || /github\.com\/user-attachments\/assets\/|githubusercontent\.com\//i.test(raw))) {
+        if (found.length >= MAX_FLOW_IMAGES || remote.some((r) => r.url === raw)) continue;
+        remote.push({ url: raw });
+        const tmp = `${clone}/.remote-img-${remote.length}`;
+        try {
+          execFileSync("curl", ["-sfL", "--max-time", "20", "--max-filesize", "5000000", "-o", tmp, raw], { stdio: "ignore" });
+          const head = readFileSync(tmp).subarray(0, 12);
+          const ext = head[0] === 0x89 && head[1] === 0x50 ? ".png" : head[0] === 0xff && head[1] === 0xd8 ? ".jpg" : head.toString("ascii", 0, 3) === "GIF" ? ".gif" : head.toString("ascii", 8, 12) === "WEBP" ? ".webp" : "";
+          if (ext) add(tmp, `remote-${remote.length}${ext}`);
+        } catch { /* unreachable or private: named in the note below */ }
+        continue;
+      }
+      let ref = raw.split("#")[0].split("?")[0];
       if (!ref || /^(https?:|data:)/i.test(ref) || !IMG.test(ref)) continue;
       try { ref = decodeURIComponent(ref); } catch { /* keep raw */ }
       add(ref.startsWith("/") ? `${clone}${ref}` : `${dir}/${ref}`, ref.split("/").pop());
@@ -402,9 +418,31 @@ function collectDocImages(clone) {
 function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
   const clone = row.clone || `${work}/${row.repo}`;
   const subpath = row.clone ? (row.sourceSubpath || "") : a.sourceSubpath;
-  const pin = row.pin != null ? row.pin : (a.deliverable || "");
+  let pin = row.pin != null ? row.pin : (a.deliverable || "");
   const total = Number.isFinite(+a.totalPoints) ? +a.totalPoints : 100;
   let shots = collectScreenshots(row, a, work, previewDir);
+  // Files the rubric names in backticks (SECURITY-CHECKLIST.md on the week 2
+  // documentation update) are pinned wherever they sit in a finals snapshot. A
+  // whole-repo read otherwise spends the budget on code and drops the checklist,
+  // and the draft then scores a file it never saw.
+  const rubricForPins = row.clone ? collectRubric(clone, a, true) : "";
+  if (row.clone && rubricForPins) {
+    const named = [...new Set([...rubricForPins.matchAll(/`([\w.-]+\.(?:md|txt|pdf|docx))`/gi)].map((m) => m[1].toLowerCase()))].filter((n) => n !== "rubric.md");
+    if (named.length) {
+      const hits = [];
+      const walk = (d, rel) => {
+        let es = [];
+        try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+        for (const e of es) {
+          if (e.name.startsWith(".") || e.name === "node_modules") continue;
+          const r = rel ? `${rel}/${e.name}` : e.name;
+          if (e.isDirectory()) walk(`${d}/${e.name}`, r); else if (named.includes(e.name.toLowerCase())) hits.push(r);
+        }
+      };
+      walk(clone, "");
+      if (hits.length) pin = [...(Array.isArray(pin) ? pin : [pin]).filter(Boolean), ...hits.sort((x, y) => x.split("/").length - y.split("/").length)];
+    }
+  }
   let docImages = false;
   if (!shots.length && row.clone) { shots = collectDocImages(clone); docImages = shots.length > 0; }
   const rubric = collectRubric(clone, a, !!row.clone);
