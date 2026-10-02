@@ -365,12 +365,48 @@ function outputFormat(a, hasShots) {
 // marks the tree as wholly the student's submission, row.sourceNote tells the
 // marker where it came from, and row.historyRepo / row.historyRev point the
 // authoring history at the full clone and the graded commit.
+// Images a finals document embeds or keeps beside itself. A documentation
+// rubric scores "screenshots show the app running", and before 2026-10-02 the
+// marker saw only text, so every student was marked down for screenshots it
+// could not see. Images referenced from the snapshot's Markdown come first,
+// then any in a folder named like screenshots/images, capped at MAX_FLOW_IMAGES.
+function collectDocImages(clone) {
+  const IMG = /\.(png|jpe?g|gif|webp)$/i;
+  const found = [];
+  const add = (full, name) => { if (found.length < MAX_FLOW_IMAGES && !found.some((f) => f.full === full) && existsSync(full)) found.push({ full, name }); };
+  const walk = (d, rel, fn) => {
+    let es = [];
+    try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      const full = `${d}/${e.name}`, r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(full, r, fn); else fn(full, r);
+    }
+  };
+  walk(clone, "", (full, r) => {
+    if (!/\.md$/i.test(r)) return;
+    let md = "";
+    try { md = readFileSync(full, "utf8"); } catch { return; }
+    const dir = full.slice(0, full.lastIndexOf("/"));
+    for (const m of md.matchAll(/!\[[^\]]*\]\(\s*<?([^)>\s]+)>?[^)]*\)|<img[^>]+src=["']([^"']+)["']/gi)) {
+      let ref = (m[1] || m[2] || "").split("#")[0].split("?")[0];
+      if (!ref || /^(https?:|data:)/i.test(ref) || !IMG.test(ref)) continue;
+      try { ref = decodeURIComponent(ref); } catch { /* keep raw */ }
+      add(ref.startsWith("/") ? `${clone}${ref}` : `${dir}/${ref}`, ref.split("/").pop());
+    }
+  });
+  walk(clone, "", (full, r) => { if (IMG.test(r) && /(^|\/)(screenshots?|images?|img|assets\/screenshots?)\//i.test(r)) add(full, r.split("/").pop()); });
+  return found.map((f) => { try { return { name: f.name, b64: readFileSync(f.full).toString("base64") }; } catch { return null; } }).filter(Boolean);
+}
+
 function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
   const clone = row.clone || `${work}/${row.repo}`;
   const subpath = row.clone ? (row.sourceSubpath || "") : a.sourceSubpath;
   const pin = row.pin != null ? row.pin : (a.deliverable || "");
   const total = Number.isFinite(+a.totalPoints) ? +a.totalPoints : 100;
-  const shots = collectScreenshots(row, a, work, previewDir);
+  let shots = collectScreenshots(row, a, work, previewDir);
+  let docImages = false;
+  if (!shots.length && row.clone) { shots = collectDocImages(clone); docImages = shots.length > 0; }
   const rubric = collectRubric(clone, a, !!row.clone);
   const declares = stylingDeclared(row);
   const failList = (row.failures || []).map((f) => `- ${f.title}`).join("\n");
@@ -383,7 +419,7 @@ function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
     rmSync(shotDir, { recursive: true, force: true });
     mkdirSync(shotDir, { recursive: true });
     shots.forEach((s, i) => {
-      const fn = `${i + 1}-${String(s.name).replace(/[^\w.-]/g, "_")}`.replace(/(\.png)?$/i, ".png");
+      const fn = `${i + 1}-${String(s.name).replace(/[^\w.-]/g, "_")}`.replace(/(\.(png|jpe?g|gif|webp))?$/i, (m) => m || ".png");
       writeFileSync(`${shotDir}/${fn}`, Buffer.from(s.b64, "base64"));
       shotRefs.push(`${row.repo}.shots/${fn}`);
     });
@@ -421,7 +457,9 @@ function writeNotesInput(row, a, { work = ".grade-work", previewDir } = {}) {
     rubric && `## Grading rubric (ground the feedback and proposed grade in this)\n${rubric}`,
     `## Automated result\nActivity ${a.id}, worth ${total} points. Raw automated tests: ${row.score} (raw count, NOT rubric points - translate per the rubric's weighted line items).${stylingLine}`,
     failList ? `### Automated checks that did not pass\n${failList}` : "### All automated checks passed.",
-    shotRefs.length
+    shotRefs.length && docImages
+      ? `## Images in the student's documents (open every one)\nThese are the images the student's own files embed or keep in a screenshots folder, copied from the graded snapshot. They are the screenshots the documentation offers, so judge any screenshot criterion from them. They are not a capture of the running app taken by the grader.\n${shotRefs.map((r) => `- ${r}`).join("\n")}`
+      : shotRefs.length
       ? `## Screenshots (open these image files to judge the design)\nListed in the order they were captured. For an app they walk one flow (a screen, then the same app after a tap, some typing or a navigation), so read them as a sequence: two consecutive shots that look identical mean that interaction did not work, which is design evidence as much as it is behavior evidence.\n${shotRefs.map((r) => `- ${r}`).join("\n")}`
       : "## Screenshots\nNone attached; comment on code only.",
     row.sourceNote ? `## Where this submission was read from\n${row.sourceNote}` : null,
