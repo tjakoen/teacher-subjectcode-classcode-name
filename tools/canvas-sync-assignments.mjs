@@ -172,7 +172,10 @@ function desired(a) {
 }
 
 // ---- load activities + live Canvas assignments ---------------------------
+// canvasSync:false marks a Canvas assignment this tool must never rewrite, such as one
+// authored and graded by a previous instructor that is only read as badge evidence.
 const activities = JSON.parse(readFileSync("grader/assignments.json", "utf8"))
+  .filter((a) => a.canvasSync !== false)
   .filter((a) => !onlyId || a.id === onlyId);
 const canvas = await apiGetAll(`/courses/${courseId}/assignments`);
 const byId = new Map();

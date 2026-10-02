@@ -98,7 +98,11 @@ export function buildStudentRoster(records, { section, teachers = [], previous =
     if (row) {
       // Award records and their delivery state belong to the issuer, not this derived index.
       row.badges = prior.badges || [];
-      for (const [key, value] of Object.entries(prior)) if (!(key in row) && key !== "stale") row[key] = value;
+      // Evidence proves one account and one workspace; it cannot follow a row whose binding has moved.
+      const evidence = prior.identityEvidence, bound = evidence && evidence.githubAccount !== undefined && evidence.workspaceRepo !== undefined;
+      const rebound = bound && (normGh(evidence.githubAccount) !== row.verifiedGithubAccount || row.workspaceRepos.length !== 1 || String(evidence.workspaceRepo).toLowerCase() !== row.workspaceRepos[0].toLowerCase());
+      if (rebound) row.holds.push("identity-evidence-binding-changed");
+      for (const [key, value] of Object.entries(prior)) if (!(key in row) && key !== "stale" && !(rebound && key === "identityEvidence")) row[key] = value;
     } else {
       groups.set(prior.studentKey, { ...prior, stale: true, identityStatus: "held", holds: unique([...(prior.holds || []), "source-record-no-longer-observed"]) });
       errors.push({ studentKey: prior.studentKey, code: "previous-record-retained" });
@@ -135,7 +139,14 @@ export function reconcileStudentRoster(records, options = {}) {
   for (const [account, entries] of candidates) {
     if (entries.length !== 1 || reasons.has(account)) { reasons.set(account, "multiple-or-conflicting-workspace-anchors"); continue; }
     const ownedRepos = new Set(parsed.filter(record => record.account === account).map(record => record.repo));
-    const submitted = canvasBindings.filter(binding => normGh(binding.account) === account && ownedRepos.has(binding.repo) && /^\d+$/.test(String(binding.canvasUserId)));
+    // One submitted link is not corroboration: a classmate's repository can be pasted into a single assignment.
+    // Each Canvas identity needs links from at least two distinct assignments (and distinct activities where those resolve).
+    const linked = canvasBindings.filter(binding => normGh(binding.account) === account && ownedRepos.has(binding.repo) && /^\d+$/.test(String(binding.canvasUserId)) && binding.assignmentId !== undefined && binding.assignmentId !== null);
+    const supported = new Set(unique(linked.map(binding => String(binding.canvasUserId))).filter(id => {
+      const own = linked.filter(binding => String(binding.canvasUserId) === id);
+      return new Set(own.map(binding => String(binding.assignmentId))).size >= 2 && new Set(own.map(binding => binding.activityId ? String(binding.activityId).toLowerCase() : `assignment:${binding.assignmentId}`)).size >= 2;
+    }));
+    const submitted = linked.filter(binding => supported.has(String(binding.canvasUserId)));
     const submittedIdentities = unique(submitted.map(binding => String(binding.canvasUserId)));
     if (submittedIdentities.length !== 1 || submittedIdentities[0] !== String(entries[0].person.id)) {
       reasons.set(account, submittedIdentities.length ? "canvas-submission-account-conflict" : "canvas-submission-account-unverified"); continue;
@@ -160,7 +171,7 @@ export function reconcileStudentRoster(records, options = {}) {
   const result = buildStudentRoster(accepted, { section, teachers, canvas, generatedAt });
   for (const row of result.students) {
     const anchor = anchors.get(row.verifiedGithubAccount);
-    row.identityEvidence = { source: "individual-canvas-submission", canvasUserId: String(anchor.person.id), workspaceRepo: anchor.workspace.repo,
+    row.identityEvidence = { source: "individual-canvas-submission", canvasUserId: String(anchor.person.id), githubAccount: row.verifiedGithubAccount, workspaceRepo: anchor.workspace.repo,
       submittedRepositories: unique(anchor.submitted.map(binding => binding.repo)), assignmentIds: unique(anchor.submitted.map(binding => String(binding.assignmentId))) };
     row.observedFields = Object.fromEntries(ROSTER_FIELDS.map(field => [field, []]));
     for (const source of row.sources) {

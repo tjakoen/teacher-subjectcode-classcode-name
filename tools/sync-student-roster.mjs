@@ -44,7 +44,7 @@ if (reconcile) {
   const binding = JSON.parse(readFileSync(bindingPath, "utf8"));
   const policy = JSON.parse(readFileSync("grader/badges.json", "utf8"));
   const age = Date.now() - new Date(binding.generatedAt).getTime();
-  if (binding.schemaVersion !== 1 || String(binding.section) !== String(section) || String(binding.canvasCourseId) !== String(policy.canvasCourseId) || !Array.isArray(binding.links) || !Number.isFinite(age) || age < 0 || age > 24 * 3600000) throw new Error("Canvas account bindings must match this course and be refreshed within 24 hours");
+  if (binding.schemaVersion !== 1 || String(binding.section) !== String(section) || !/^\d+$/.test(String(binding.canvasCourseId)) || !/^\d+$/.test(String(policy.canvasCourseId)) || String(binding.canvasCourseId) !== String(policy.canvasCourseId) || !Array.isArray(binding.links) || !Number.isFinite(age) || age < 0 || age > 24 * 3600000) throw new Error("Canvas account bindings must match this course and be refreshed within 24 hours");
   canvasBindings = binding.links;
 }
 const roster = (reconcile ? reconcileStudentRoster : buildStudentRoster)(records, { section, teachers, previous, canvas, canvasBindings });

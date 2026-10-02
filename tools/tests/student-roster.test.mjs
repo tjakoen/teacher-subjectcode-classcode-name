@@ -1,4 +1,9 @@
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { buildStudentRoster, reconcileStudentRoster, canvasRoster, canvasRosterJson } from "../lib/student-roster.mjs";
 const source = (repo, extra = {}) => ({ repo, collaborators: ["learner"], student: { studentNumber: "2026-1234567", classCode: "1000", githubAccount: "learner", studentEmail: "school@example.com", personalEmail: "personal@example.com", pcNumber: "1", room: "A" }, ...extra });
@@ -86,7 +91,7 @@ test("uses authoritative Canvas names and retains all observed names", () => {
   assert.ok(held.holds.includes("source-account-conflict"));
 });
 const authoritativeCanvas = [{ id: "1", studentNumber: "1234567", email: "school@example.com", name: "Canvas Name" }];
-const reconcileOptions = { ...options, canvas: authoritativeCanvas, canvasBindings: [{ account: "learner", canvasUserId: "1", repo: "workspace", assignmentId: "10" }] };
+const reconcileOptions = { ...options, canvas: authoritativeCanvas, canvasBindings: [{ account: "learner", canvasUserId: "1", repo: "workspace", assignmentId: "10", activityId: "m1a1" }, { account: "learner", canvasUserId: "1", repo: "workspace", assignmentId: "11", activityId: "m1a2" }] };
 test("reconciliation canonicalizes owned aliases without losing observations", () => {
   const workspace = source("workspace", { workspace: true });
   const alias = source("alias"); alias.student = { ...alias.student, studentNumber: "0000000", classCode: "9999", personalEmail: "untrusted@example.com" };
@@ -106,6 +111,24 @@ test("reconciliation accepts email-only anchors but quarantines foreign claims",
   assert.equal(roster.reconciliation.anchoredSources, 1);
   assert.equal(roster.reconciliation.quarantinedSources[0].code, "source-claims-another-canvas-identity");
   assert.equal(roster.students.find(s => !s.quarantined).identityStatus, "verified");
+});
+test("reconciliation needs links from two distinct assignments before a Canvas submission corroborates an account", () => {
+  const workspace = source("workspace", { workspace: true });
+  const one = { account: "learner", canvasUserId: "1", repo: "workspace", assignmentId: "10", activityId: "m1a1" };
+  const anchored = canvasBindings => reconcileStudentRoster([workspace], { ...reconcileOptions, canvasBindings }).reconciliation.anchoredSources;
+  assert.equal(anchored([one]), 0);
+  assert.equal(anchored([one, { ...one }]), 0);
+  assert.equal(anchored([one, { ...one, assignmentId: "11" }]), 0);
+  assert.equal(anchored([one, { ...one, assignmentId: "11", activityId: "m1a2" }]), 1);
+  assert.equal(anchored([{ ...one, activityId: undefined }, { ...one, assignmentId: "11", activityId: undefined }]), 1);
+});
+test("a classmate linking the workspace once does not displace the owner linking twice", () => {
+  const workspace = source("workspace", { workspace: true });
+  const own = [{ account: "learner", canvasUserId: "1", repo: "workspace", assignmentId: "10", activityId: "m1a1" }, { account: "learner", canvasUserId: "1", repo: "workspace", assignmentId: "11", activityId: "m1a2" }];
+  const stray = { account: "learner", canvasUserId: "2", repo: "workspace", assignmentId: "10", activityId: "m1a1" };
+  assert.equal(reconcileStudentRoster([workspace], { ...reconcileOptions, canvasBindings: [...own, stray] }).reconciliation.anchoredSources, 1);
+  const both = [...own, stray, { ...stray, assignmentId: "11", activityId: "m1a2" }];
+  assert.equal(reconcileStudentRoster([workspace], { ...reconcileOptions, canvasBindings: both }).reconciliation.anchoredSources, 0);
 });
 test("reconciliation excludes ownerless contact injections", () => {
   const workspace = source("workspace", { workspace: true });
@@ -176,4 +199,47 @@ test("previous quarantine flags cannot hide a newly corroborated canonical ident
   assert.ok(canonical);
   assert.equal(canonical.quarantined, undefined);
   assert.equal(canonical.superseded, undefined);
+});
+
+test("reconciliation evidence records the bound account and workspace", () => {
+  const row = reconcileStudentRoster([source("workspace", { workspace: true })], reconcileOptions).students.find(s => s.identityStatus === "verified");
+  assert.equal(row.identityEvidence.githubAccount, "learner");
+  assert.equal(row.identityEvidence.workspaceRepo, "workspace");
+});
+
+test("a plain sync drops identity evidence once the workspace account changes", () => {
+  const records = [source("workspace", { workspace: true })], alias = source("alias"); alias.student.studentNumber = "0000000";
+  const reconciled = reconcileStudentRoster([...records, alias], reconcileOptions);
+  const badge = { awardKey: "award", url: "https://example.test/cert" };
+  reconciled.students.find(s => s.identityStatus === "verified").badges = [badge];
+  const key = reconciled.students.find(s => s.identityStatus === "verified").studentKey, pick = roster => roster.students.find(s => s.studentKey === key);
+  const same = pick(buildStudentRoster([...records, alias], { ...options, previous: reconciled }));
+  assert.equal(same.identityEvidence.githubAccount, "learner");
+  const moved = pick(buildStudentRoster([source("workspace", { workspace: true, collaborators: ["someone-else"] }), alias], { ...options, previous: reconciled }));
+  assert.equal(moved.identityEvidence, undefined);
+  assert.ok(moved.holds.includes("identity-evidence-binding-changed"));
+  assert.equal(moved.identityStatus, "held");
+  assert.deepEqual(moved.badges, [badge]);
+  assert.ok(moved.observedFields.studentNumber.includes("0000000"));
+  assert.ok(moved.sources.length >= 1);
+  const relocated = pick(buildStudentRoster([source("new-workspace", { workspace: true }), alias], { ...options, previous: reconciled }));
+  assert.equal(relocated.identityEvidence, undefined);
+  assert.ok(relocated.holds.includes("identity-evidence-binding-changed"));
+});
+
+test("reconcile refuses bindings and policy that both lack a numeric Canvas course id", () => {
+  const dir = mkdtempSync(join(tmpdir(), "roster-sync-"));
+  try {
+    mkdirSync(join(dir, "grader")); mkdirSync(join(dir, "roster"));
+    writeFileSync(join(dir, "grader/badges.json"), JSON.stringify({ badges: [] }));
+    writeFileSync(join(dir, "roster/canvas-account-bindings.json"), JSON.stringify({ schemaVersion: 1, section: "1000", generatedAt: new Date().toISOString(), links: [] }));
+    writeFileSync(join(dir, "snapshot.json"), JSON.stringify([source("workspace", { workspace: true })]));
+    writeFileSync(join(dir, "canvas.json"), JSON.stringify([{ id: 1, studentNumber: "1234567", email: "school@example.com" }]));
+    const script = fileURLToPath(new URL("../sync-student-roster.mjs", import.meta.url));
+    const run = () => spawnSync(process.execPath, [script, "--from-snapshot=snapshot.json", "--canvas-json=canvas.json", "--reconcile"], { cwd: dir, env: { ...process.env, SECTION: "1000" }, encoding: "utf8" });
+    assert.match(run().stderr, /Canvas account bindings must match this course/);
+    writeFileSync(join(dir, "grader/badges.json"), JSON.stringify({ canvasCourseId: 55, badges: [] }));
+    writeFileSync(join(dir, "roster/canvas-account-bindings.json"), JSON.stringify({ schemaVersion: 1, section: "1000", canvasCourseId: 55, generatedAt: new Date().toISOString(), links: [] }));
+    assert.equal(run().status, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
