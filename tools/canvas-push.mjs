@@ -30,7 +30,7 @@ import { writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   makeIdResolver, loadPolicy, loadGradebook, consolidate, matchGroups, pointsFor,
-  authorshipNotice,
+  authorshipNotice, resolveSourceOwner,
 } from "./lib/gradebook.mjs";
 
 // ---- args / env ----------------------------------------------------------
@@ -68,7 +68,7 @@ const fmtDate = (iso) => {
 // line breaks in submission comments, so a "- " list reads cleanly).
 const buildComment = (t, score, pts) => {
   const sha7 = (score.sha || "").slice(0, 7);
-  const url = OWNER && score.repo && score.sha ? `https://github.com/${OWNER}/${score.repo}/commit/${score.sha}` : "";
+  const url = (score.sourceOwner || OWNER) && score.repo && score.sha ? `https://github.com/${resolveSourceOwner(score.sourceOwner, OWNER)}/${score.repo}/commit/${score.sha}` : "";
   const lines = [`- Graded on: ${fmtDate(score.gradedAt)}`];
   if (score.repo) lines.push(`- Submission: ${score.repo}${sha7 ? `@${sha7}` : ""}${score.late ? "  (submitted late)" : ""}`);
   if (t.autoPoints != null) {
@@ -85,10 +85,9 @@ const buildComment = (t, score, pts) => {
 // comment carries a rubric breakdown of how it was reached plus the student
 // feedback prose. It deliberately EXCLUDES the instructor-only header, the
 // proposed-total restatement, and the AI-authored likelihood line, and never
-// mentions AI - the same wall the published FEEDBACK.md keeps. The one thing
-// that does cross that wall is `authorshipNotice`: a medium/high likelihood adds
-// a fixed, non-accusatory line telling the student authorship is being watched.
-// The estimate itself, its tier, and its reasoning still never leave the note.
+// mentions AI - the same wall the published FEEDBACK.md keeps. Private
+// authorship estimates never create an automatic student-facing warning.
+// Any authorship discussion must be explicitly reviewed student feedback.
 const readNote = (ourId, repo) => {
   try { return readFileSync(`gradebook/notes/${ourId}/${repo}.md`, "utf8"); } catch { return ""; }
 };
@@ -114,11 +113,16 @@ const parseAiNote = (note) => {
   return { student, breakdown };
 };
 const buildAiComment = (t, score, pts) => {
+  if ((noteOwners.get(t.ourId + "/" + score.repo.toLowerCase())?.size || 0) > 1) {
+    throw new Error("Feedback source owner is ambiguous; resolve the reviewed note before delivery");
+  }
   const note = readNote(t.ourId, score.repo);
   const { student, breakdown } = parseAiNote(note);
+  // Authorship concerns reach students only through explicitly reviewed prose.
+  // The legacy helper never derives a warning from private estimates.
   const notice = authorshipNotice(note);
   const sha7 = (score.sha || "").slice(0, 7);
-  const url = OWNER && score.repo && score.sha ? `https://github.com/${OWNER}/${score.repo}/commit/${score.sha}` : "";
+  const url = (score.sourceOwner || OWNER) && score.repo && score.sha ? `https://github.com/${resolveSourceOwner(score.sourceOwner, OWNER)}/${score.repo}/commit/${score.sha}` : "";
   const lines = [`Grade: ${pts}/${t.pointsPossible ?? "?"}`];
   if (breakdown) lines.push("", "How this grade was reached:", breakdown);
   if (student) lines.push("", "Feedback:", student);
@@ -128,10 +132,11 @@ const buildAiComment = (t, score, pts) => {
   return lines.join("\n");
 };
 // The reviewed final score lives in the gradebook's aiScore column.
-const aiPointsFor = (score) => {
-  if (!score || score.aiScore == null || score.aiScore === "") return null;
+const aiPointsFor = (score, target = {}) => {
+  if (!score || String(score.aiScore ?? "").trim() === "") return null;
   const n = Number(score.aiScore);
-  return Number.isFinite(n) ? Math.round(n) : null;
+  const max = target.rubricPoints ?? target.pointsPossible ?? null;
+  return Number.isFinite(n) && n >= 0 && (max == null || n <= max) ? Math.round(n) : null;
 };
 
 // ---- Canvas REST client --------------------------------------------------
@@ -162,7 +167,15 @@ const apiGetAll = async (path) => {
 const { rows, section } = loadGradebook("gradebook/grades.csv", sectionArg);
 const policy = loadPolicy();
 const resolveId = makeIdResolver(policy);
-const groups = consolidate(rows, section);
+const groups = consolidate(rows, section, OWNER);
+// A legacy note path has no owner segment; conflicting owners require review.
+const noteOwners = new Map();
+for (const row of rows) {
+  const key = row.assignment + "/" + row.repo.toLowerCase();
+  if (!noteOwners.has(key)) noteOwners.set(key, new Set());
+  noteOwners.get(key).add(resolveSourceOwner(row.sourceOwner, OWNER).toLowerCase());
+}
+
 
 // ---- pull roster + assignments live --------------------------------------
 console.log(`canvas-push: course ${courseId} on ${BASE} (${checkOnly ? "check only" : execute ? "EXECUTE" : "dry run"})${only.length ? ` [only: ${only.join(", ")}]` : ""}`);
@@ -223,7 +236,7 @@ for (const a of assignments) {
   // (grades.csv aiScore) IS the grade, delivered with a rubric-breakdown comment.
   if (pol.aiGraded) {
     if (pol.publish) {
-      targets.push({ ourId, canvasId: a.id, name: a.name, pointsPossible: a.points_possible ?? pol.totalPoints ?? null, autoPoints: null, locked: !!pol.locked, ai: true });
+      targets.push({ ourId, canvasId: a.id, name: a.name, pointsPossible: a.points_possible ?? pol.totalPoints ?? null, autoPoints: null, rubricPoints: pol.totalPoints ?? pol.autoPoints ?? null, locked: !!pol.locked, ai: true });
     } else {
       heldForReview.push({ ourId, name: a.name });
     }
@@ -264,10 +277,8 @@ const alreadyGraded = new Map();      // canvasId -> Set(userId)             [lo
 const existingComments = new Map();   // canvasId -> Map(userId -> Set(text)) [comments]
 for (const t of targets.filter((x) => x.locked || withComment || x.ai)) {
   const wantComments = withComment || t.ai;   // AI-reviewed always carries a comment
-  let subs = [];
-  try {
-    subs = await apiGetAll(`/courses/${courseId}/assignments/${t.canvasId}/submissions${wantComments ? "?include[]=submission_comments" : ""}`);
-  } catch { subs = []; }   // a fetch hiccup must not block grades; treat as "none known"
+  // Missing lock or comment evidence cannot authorize an overwrite or duplicate.
+  const subs = await apiGetAll(`/courses/${courseId}/assignments/${t.canvasId}/submissions${wantComments ? "?include[]=submission_comments" : ""}`);
   if (t.locked) {
     // Map userId -> Canvas score (presence still answers "already graded?"; the
     // value lets --override-locked compare and overwrite only on a disagreement).
@@ -291,7 +302,7 @@ const planRows = [];          // for the report
 for (const { student, group } of pairs) {
   for (const t of targets) {
     const score = group.scores.get(t.ourId);
-    const pts = t.ai ? aiPointsFor(score) : pointsFor(score, t);
+    const pts = t.ai ? aiPointsFor(score, t) : pointsFor(score, t);
     if (pts == null) continue;   // AI: not yet reviewed (blank aiScore) -> skip
     // Locked + already graded in Canvas -> normally leave it; never overwrite.
     // --override-locked overwrites a locked DETERMINISTIC grade only when our
