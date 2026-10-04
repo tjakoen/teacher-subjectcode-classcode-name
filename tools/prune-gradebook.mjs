@@ -16,9 +16,9 @@
 // Usage: node tools/prune-gradebook.mjs [--execute]
 // Auth/env: gh login (repo existence checks), GRADE_OWNER (org).
 
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { parseCsvLine } from "./lib/gradebook.mjs";
+import { parseCsvLine, resolveSourceOwner } from "./lib/gradebook.mjs";
 
 const execute = process.argv.includes("--execute");
 const sh = (cmd) => execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -33,7 +33,9 @@ const header = lines[0];
 const col = Object.fromEntries(parseCsvLine(header).map((c, i) => [c, i]));
 const rows = lines.slice(1).filter(Boolean).map((ln) => {
   const f = parseCsvLine(ln);
-  return { line: ln, repo: f[col.repo], sha: f[col.sha] || "", assignment: f[col.assignment] };
+  const sourceOwner = resolveSourceOwner(col.sourceOwner != null ? f[col.sourceOwner] : "", OWNER);
+  if (!/^[A-Za-z0-9_.-]+$/.test(f[col.repo] || "")) throw new Error("Invalid repository name in gradebook; pruning stopped");
+  return { line: ln, sourceOwner, sourceKey: `${sourceOwner}/${f[col.repo]}`, repo: f[col.repo], sha: f[col.sha] || "", assignment: f[col.assignment] };
 });
 
 // Check each distinct repo once. CRITICAL: only a DEFINITIVE 404 counts as
@@ -41,18 +43,18 @@ const rows = lines.slice(1).filter(Boolean).map((ln) => {
 // the many rapid checks must NEVER be mistaken for a deleted repo, or --execute
 // would drop valid rows. Retry transient errors; leave anything still uncertain
 // as unknown (null) so it is skipped, not pruned.
-const repoExists = (repo) => {
+const repoExists = (sourceKey) => {
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { execSync(`gh api repos/${OWNER}/${repo} -q .id`, { stdio: ["ignore", "pipe", "pipe"] }); return true; }
+    try { execFileSync("gh", ["api", "repos/" + sourceKey, "-q", ".id"], { stdio: ["ignore", "pipe", "pipe"] }); return true; }
     catch (e) {
       const msg = String(e.stderr || e.stdout || e.message || "");
-      if (/HTTP 404|Not Found/.test(msg)) return false;   // definitive: repo is gone
+      if (/HTTP 404|Not Found/.test(msg)) return sourceKey.split("/")[0].toLowerCase() === OWNER.toLowerCase() ? false : null;   // personal-source 404 may be an access failure
       execSync("sleep 2");                                  // transient: back off and retry
     }
   }
   return null;   // still uncertain after retries -> do NOT prune
 };
-const repos = [...new Set(rows.map((r) => r.repo))];
+const repos = [...new Set(rows.map((r) => r.sourceKey))];
 const exists = new Map();
 const uncertain = [];
 for (const repo of repos) {
@@ -69,7 +71,7 @@ if (uncertain.length) console.log(`WARN: could not confirm ${uncertain.length} r
 // the entire review lane. A genuinely graded row always carries a sha.
 const synthetic = rows.filter((r) => !r.sha);
 if (synthetic.length) console.log(`Skipping ${synthetic.length} synthetic row(s) with no sha (held review-lane rows, no repo expected).`);
-const dead = rows.filter((r) => r.sha && exists.get(r.repo) === false);
+const dead = rows.filter((r) => r.sha && exists.get(r.sourceKey) === false);
 console.log(`prune-gradebook: ${rows.length} rows, ${repos.length} repos, owner ${OWNER}`);
 if (!dead.length) { console.log("No rows reference a missing repo. Gradebook is clean."); process.exit(0); }
 

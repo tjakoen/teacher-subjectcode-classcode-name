@@ -8,6 +8,28 @@
 
 import { readFileSync, existsSync } from "node:fs";
 
+// A source owner is a GitHub account name, never a URL or repository path.
+// Empty legacy metadata uses the configured course owner.
+export const resolveSourceOwner = (raw, fallback = "") => {
+  const owner = String(raw || fallback || "").trim();
+  if (!owner) return "";
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) {
+    throw new Error("Invalid source owner metadata; resolve provenance before delivery");
+  }
+  return owner;
+};
+
+// Stable source identity for sweep caches, review preservation and row updates.
+export const gradeRowKey = (row, fallback = "") => {
+  const owner = resolveSourceOwner(row.sourceOwner, fallback).toLowerCase();
+  const repo = String(row.repo || "");
+  const assignment = String(row.assignment || "");
+  if (!owner || !/^[A-Za-z0-9_.-]+$/.test(repo) || !/^[A-Za-z0-9_-]+$/.test(assignment)) {
+    throw new Error("Invalid grading source identity");
+  }
+  return owner + "/" + repo.toLowerCase() + "|" + assignment.toLowerCase();
+};
+
 // ---- CSV helpers (same dialect as grade-sweep.mjs) -----------------------
 export const parseCsvLine = (line) => {
   const out = [];
@@ -164,7 +186,7 @@ export function loadGradebook(path = "gradebook/grades.csv", sectionArg = null) 
   const header = parseCsvLine(lines[0]);
   const col = (name) => header.indexOf(name);
   const ci = {
-    repo: col("repo"), github: col("githubAccount"), name: col("fullName"),
+    sourceOwner: col("sourceOwner"), repo: col("repo"), github: col("githubAccount"), name: col("fullName"),
     num: col("studentNumber"), email: col("studentEmail"), classCode: col("classCode"),
     assignment: col("assignment"), sha: col("sha"), passed: col("passed"), total: col("total"),
     gradedAt: col("gradedAt"), late: col("late"), aiScore: col("aiScore"), notes: col("notes"),
@@ -172,7 +194,7 @@ export function loadGradebook(path = "gradebook/grades.csv", sectionArg = null) 
   const rows = lines.slice(1).filter(Boolean).map((ln) => {
     const f = parseCsvLine(ln);
     return {
-      repo: f[ci.repo], github: f[ci.github], name: f[ci.name], num: f[ci.num],
+      sourceOwner: resolveSourceOwner(ci.sourceOwner >= 0 ? f[ci.sourceOwner] : ""), repo: f[ci.repo], github: f[ci.github], name: f[ci.name], num: f[ci.num],
       email: f[ci.email], classCode: f[ci.classCode], assignment: f[ci.assignment],
       sha: ci.sha >= 0 ? f[ci.sha] || "" : "", passed: +f[ci.passed], total: +f[ci.total],
       gradedAt: f[ci.gradedAt] || "", late: ci.late >= 0 ? f[ci.late] === "true" : false,
@@ -201,7 +223,7 @@ export function loadGradebook(path = "gradebook/grades.csv", sectionArg = null) 
 // through its email and its repo stem.
 const joinNum = (s) => { const n = normNum(s); return n.replace(/\D/g, "").length >= 6 ? n : ""; };
 
-export function consolidate(rows, section) {
+export function consolidate(rows, section, owner = process.env.GRADE_OWNER || "") {
   const parent = rows.map((_, i) => i);
   const find = (x) => (parent[x] === x ? x : (parent[x] = find(parent[x])));
   const union = (a, b) => { parent[find(a)] = find(b); };
@@ -210,9 +232,16 @@ export function consolidate(rows, section) {
     const ks = [];
     if (joinNum(r.num)) ks.push("num:" + joinNum(r.num));
     if (normEmail(r.email)) ks.push("em:" + normEmail(r.email));
-    if (normGh(r.github)) ks.push("gh:" + normGh(r.github));
+    const sourceNamespace = "repo-owner:" + resolveSourceOwner(r.sourceOwner, owner).toLowerCase() + ":";
+    const account = normGh(r.github);
+    if (account) {
+      ks.push("gh:" + account);
+      // Legacy blank-identity rows can bridge to an explicit account only
+      // within the same effective source owner.
+      ks.push(sourceNamespace + account);
+    }
     const stem = repoStem(r.repo, section);
-    if (stem) ks.push("gh:" + stem);
+    if (stem) ks.push(sourceNamespace + stem);
     return ks;
   };
   rows.forEach((r, i) => {
@@ -239,7 +268,7 @@ export function consolidate(rows, section) {
       if (!prev || r.gradedAt > prev.gradedAt) {
         g.scores.set(r.assignment, {
           passed: r.passed, total: r.total, gradedAt: r.gradedAt,
-          repo: r.repo, sha: r.sha, late: r.late, aiScore: r.aiScore, notes: r.notes,
+          repo: r.repo, sourceOwner: r.sourceOwner || "", sha: r.sha, late: r.late, aiScore: r.aiScore, notes: r.notes,
         });
       }
     }
@@ -280,20 +309,13 @@ export function matchGroups(groups, students, { sisOf, loginOf, nameOf = () => "
   return { pairs, unmatched, groupOf };
 }
 
-// ---- authorship notice ---------------------------------------------------
-// The instructor half of an AI feedback note ends with a private
-// `AI-authored likelihood: low|medium|high` estimate. That line itself is never
-// shown to a student, but from 2026-08-03 the instructor wants a student on the
-// medium or high end told, plainly, that authorship is being watched: no score
-// change, no penalty, no mention that a model produced the signal. Same single
-// line for both tiers, deliberately - a "medium" student should not be able to
-// infer they were rated lower risk than a "high" one.
-export const AUTHORSHIP_NOTICE =
-  "Note on authorship: parts of this submission read as more advanced than the work and pace I have seen from you so far. No penalty has been applied. Be ready to walk me through your code and explain your choices if I ask.";
-
-// The note text (whole file, both halves) -> the notice, or "" for low/absent.
-export const authorshipNotice = (note) =>
-  /ai-authored likelihood:\s*(?:high|medium)\b/i.test(String(note ?? "")) ? AUTHORSHIP_NOTICE : "";
+// ---- private authorship estimates ---------------------------------------
+// Private authorship estimates remain instructor-only. These legacy exports
+// remain available so older delivery callers keep working, but they never
+// derive a student-facing warning from an estimate. Any student-facing
+// authorship discussion must be explicitly reviewed feedback prose.
+export const AUTHORSHIP_NOTICE = "";
+export const authorshipNotice = () => "";
 
 // passed/total -> Canvas points. Returns null when nothing should be written
 // (no grade, or a 0/0 unbuildable submission). Subjective activities scale to

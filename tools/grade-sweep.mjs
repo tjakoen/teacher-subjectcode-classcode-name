@@ -21,6 +21,7 @@ import {
 import { availableParallelism } from "node:os";
 import { promisify } from "node:util";
 import { runNotesPass } from "./lib/ai-feedback.mjs";
+import { gradeRowKey, resolveSourceOwner, normNum, normEmail, normGh } from "./lib/gradebook.mjs";
 
 const pExecFile = promisify(execFile);
 
@@ -104,7 +105,7 @@ mkdirSync(WORK, { recursive: true });
 
 // ---- CSV helpers ---------------------------------------------------------
 const HEADER =
-  "repo,githubAccount,fullName,studentNumber,studentEmail,classCode,assignment,sha,passed,total,score,gradedAt,late,notes,aiScore,failures";
+  "repo,githubAccount,fullName,studentNumber,studentEmail,classCode,assignment,sha,passed,total,score,gradedAt,late,notes,aiScore,failures,sourceOwner";
 // Notes are markdown (commas + newlines) and failures is a JSON array, so both
 // are stored base64 in the CSV to stay on one field/line; the rest is plain.
 const encNotes = (s) => (s ? Buffer.from(String(s), "utf8").toString("base64") : "");
@@ -142,7 +143,7 @@ const clearedReviews = [];   // rows whose reviewed score a re-grade legitimatel
 const gradedThisRun = new Set(); // `${repo}|${assignment}` actually (re)graded now -> AI feedback gate
 if (existsSync(CSV)) {
   const lines = readFileSync(CSV, "utf8").trim().split("\n");
-  if (lines[0] === HEADER) { // ignore an old/foreign format and start fresh
+  if (lines[0] === HEADER || lines[0] === HEADER.replace(/,sourceOwner$/, "")) { // retain prior rows while upgrading the schema
     for (const ln of lines.slice(1).filter(Boolean)) {
       const f = parseCsvLine(ln);
       const row = {
@@ -151,11 +152,11 @@ if (existsSync(CSV)) {
         passed: +f[8], total: +f[9], score: f[10], gradedAt: f[11],
         late: f[12] === "true", notes: decNotes(f[13]),
         aiScore: f[14] === "" || f[14] == null ? null : +f[14],
-        failures: decFails(f[15]),
+        failures: decFails(f[15]), sourceOwner: f[16] || "",
       };
       rows.push(row);
-      seen.set(`${row.repo}|${row.assignment}`, row.sha);
-      prior.set(`${row.repo}|${row.assignment}`, row);
+      seen.set(gradeRowKey(row, OWNER), row.sha);
+      prior.set(gradeRowKey(row, OWNER), row);
     }
   }
 }
@@ -420,15 +421,20 @@ const repoTail = (name) => {
 const identityFromSiblings = (repo) => {
   const t = repoTail(repo);
   if (!t) return null;
-  for (const r of rows) {
-    if (!r.studentNumber || repoTail(r.repo) !== t) continue;
-    return {
-      githubAccount: r.githubAccount || "", fullName: r.fullName || "",
-      studentNumber: r.studentNumber, studentEmail: r.studentEmail || "",
-      classCode: r.classCode || "",
-    };
-  }
-  return null;
+  const candidates = rows.filter((r) =>
+    r.studentNumber && repoTail(r.repo) === t &&
+    resolveSourceOwner(r.sourceOwner, OWNER).toLowerCase() === OWNER.toLowerCase());
+  const identities = new Set(candidates.map((r) => JSON.stringify([
+    normNum(r.studentNumber), normEmail(r.studentEmail),
+    normGh(r.githubAccount), String(r.classCode || "").trim(),
+  ])));
+  if (identities.size !== 1) return null;
+  const r = candidates[0];
+  return {
+    githubAccount: r.githubAccount || "", fullName: r.fullName || "",
+    studentNumber: r.studentNumber, studentEmail: r.studentEmail || "",
+    classCode: r.classCode || "",
+  };
 };
 
 // Read a student's identity from their student.json (if present in the clone).
@@ -519,7 +525,7 @@ async function gradeOne(a, repo, stale) {
       log.push(`  identity: student.json is blank - took identity from this student's other submissions`);
     }
   }
-  const alreadyGraded = seen.has(`${repo}|${a.id}`);
+  const alreadyGraded = seen.has(gradeRowKey({ repo, assignment: a.id }, OWNER));
   // LOCKED assignment: a grade already recorded is frozen (re-submissions are
   // ignored). A student not yet graded can still be graded, but flagged late.
   if (a.locked && alreadyGraded) {
@@ -528,7 +534,7 @@ async function gradeOne(a, repo, stale) {
   }
   // UNLOCKED: skip if unchanged since last grade (unless --force, or the
   // canonical tests changed since that grade was computed).
-  if (!a.locked && !force && !stale && seen.get(`${repo}|${a.id}`) === sha) {
+  if (!a.locked && !force && !stale && seen.get(gradeRowKey({ repo, assignment: a.id }, OWNER)) === sha) {
     log.push(`skip  ${repo} (${a.id}) - already graded @ ${sha.slice(0, 7)}`);
     return done({ freshen: stu }); // keep roster info fresh even when skipping
   }
@@ -551,11 +557,11 @@ async function gradeOne(a, repo, stale) {
   // code the tests still score exactly the same way, and re-running the sweep
   // must not be able to silently throw it away. If passed/total moved, the code
   // materially changed and the review is genuinely stale, so it still clears.
-  const was = prior.get(`${repo}|${a.id}`);
+  const was = prior.get(gradeRowKey({ repo, assignment: a.id }, OWNER));
   const reviewStands = was && was.aiScore != null && was.passed === res.passed && was.total === res.total;
   if (reviewStands) preservedReviews.push(`${repo} (${a.id}) - kept reviewed ${was.aiScore} across a re-grade at the same ${res.passed}/${res.total}`);
   else if (was && was.aiScore != null) clearedReviews.push(`${repo} (${a.id}) - CLEARED reviewed ${was.aiScore}: automated result moved ${was.passed}/${was.total} to ${res.passed}/${res.total}, so it needs reviewing again`);
-  const row = { repo, ...stu, assignment: a.id, sha, passed: res.passed, total: res.total, score, late, gradedAt: new Date().toISOString(), notes: reviewStands ? was.notes : "", aiScore: reviewStands ? was.aiScore : null, failures: res.failures || [] };
+  const row = { repo, ...stu, sourceOwner: OWNER, assignment: a.id, sha, passed: res.passed, total: res.total, score, late, gradedAt: new Date().toISOString(), notes: reviewStands ? was.notes : "", aiScore: reviewStands ? was.aiScore : null, failures: res.failures || [] };
   const flags = `${late ? " LATE" : ""}${res.malformed ? " MALFORMED(wrong-template?)" : ""}`;
   log.push(`${dryRun ? "[dry-run] " : ""}grade ${repo} (${a.id}): ${score}${flags}`);
   // Free the runner disk as we go: per-repo node_modules/.dart_tool add up
@@ -585,9 +591,9 @@ for (const a of assignments) {
     const pre = peeked.get(repo);
     if (pre) {
       if (!pre.head) { console.log(`empty ${repo} (${a.id}) - no commits yet, skipping`); continue; }
-      const key = `${repo}|${a.id}`;
+      const key = gradeRowKey({ repo, assignment: a.id }, OWNER);
       const freshen = () => {
-        const ex = rows.find((r) => r.repo === repo && r.assignment === a.id);
+        const ex = rows.find((r) => gradeRowKey(r, OWNER) === gradeRowKey({ repo, assignment: a.id }, OWNER));
         if (ex) Object.assign(ex, parseStudent(pre.student));
       };
       if (a.locked && seen.has(key)) {
@@ -611,13 +617,13 @@ for (const a of assignments) {
     const repo = todo[i];
     for (const ln of res.log) console.log(ln);
     if (res.freshen) {
-      const ex = rows.find((r) => r.repo === repo && r.assignment === a.id);
+      const ex = rows.find((r) => gradeRowKey(r, OWNER) === gradeRowKey({ repo, assignment: a.id }, OWNER));
       if (ex) Object.assign(ex, res.freshen);
     }
     if (!res.row) return;
-    const idx = rows.findIndex((r) => r.repo === repo && r.assignment === a.id);
+    const idx = rows.findIndex((r) => gradeRowKey(r, OWNER) === gradeRowKey({ repo, assignment: a.id }, OWNER));
     if (idx >= 0) rows[idx] = res.row; else rows.push(res.row);
-    seen.set(`${repo}|${a.id}`, res.sha);
+    seen.set(gradeRowKey({ repo, assignment: a.id }, OWNER), res.sha);
     gradedThisRun.add(`${repo}|${a.id}`); // genuinely (re)graded now -> eligible for AI notes
     for (const t of res.advisories || []) {
       if (!advisorySeen.has(a.id)) advisorySeen.set(a.id, new Map());
@@ -629,7 +635,12 @@ for (const a of assignments) {
 }
 
 // ---- AI feedback notes (after grading; best-effort) ----------------------
-await runNotesPass(rows, assignments, gradedThisRun, { work: WORK });
+const notesRows = rows.filter((r) =>
+  resolveSourceOwner(r.sourceOwner, OWNER).toLowerCase() === OWNER.toLowerCase() &&
+  !rows.some((other) => other.repo.toLowerCase() === r.repo.toLowerCase() &&
+    other.assignment === r.assignment &&
+    resolveSourceOwner(other.sourceOwner, OWNER).toLowerCase() !== OWNER.toLowerCase()));
+await runNotesPass(notesRows, assignments, gradedThisRun, { work: WORK });
 
 // ---- anomaly tripwires ---------------------------------------------------
 // Two shapes that read as a student failing but are usually the toolchain. They
@@ -721,7 +732,7 @@ writeFileSync(
       [
         r.repo, r.githubAccount, r.fullName, r.studentNumber, r.studentEmail,
         r.classCode, r.assignment, r.sha, r.passed, r.total, r.score, r.gradedAt,
-        r.late ? "true" : "", encNotes(r.notes), r.aiScore ?? "", encFails(r.failures),
+        r.late ? "true" : "", encNotes(r.notes), r.aiScore ?? "", encFails(r.failures), r.sourceOwner || "",
       ].map(csvField).join(",")
     ).join("\n") + "\n",
 );

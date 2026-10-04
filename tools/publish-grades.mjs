@@ -19,10 +19,10 @@ import { execSync } from "node:child_process";
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync, readdirSync,
 } from "node:fs";
-import { loadPolicy, authorshipNotice } from "./lib/gradebook.mjs";
+import { loadPolicy, authorshipNotice, resolveSourceOwner } from "./lib/gradebook.mjs";
 
-// The teacher-side note behind a delivered grade. Only its authorship estimate is
-// read here; the student prose itself comes from the base64 `notes` column.
+// The teacher-side note remains private. The legacy notice helper is a no-op;
+// student prose comes only from the explicitly reviewed base64 notes column.
 const readNoteFile = (activity, repo) => {
   try { return readFileSync(`gradebook/notes/${activity}/${repo}.md`, "utf8"); } catch { return ""; }
 };
@@ -33,6 +33,10 @@ const onlyArg = process.argv.find((a) => a.startsWith("--only="));
 const only = onlyArg ? onlyArg.split("=")[1] : null;
 const repoArg = process.argv.find((a) => a.startsWith("--repo="));
 const onlyRepo = repoArg ? repoArg.split("=")[1] : null;
+if (execute && (onlyArg || repoArg)) {
+  console.error("Execute requires a complete section; --only and --repo are dry-run filters only.");
+  process.exit(1);
+}
 if (!section) {
   console.error("usage: publish-grades.mjs <section> [--execute] [--only=<id>] [--repo=<name>]");
   process.exit(1);
@@ -72,7 +76,7 @@ const lines = readFileSync(CSV, "utf8").trim().split("\n");
 const col = Object.fromEntries(parseCsvLine(lines[0]).map((c, i) => [c, i]));
 const get = (f, name) => (col[name] != null ? f[col[name]] : "");
 const allRows = lines.slice(1).filter(Boolean).map(parseCsvLine).map((f) => ({
-  repo: get(f, "repo"), githubAccount: get(f, "githubAccount"), fullName: get(f, "fullName"),
+  sourceOwner: resolveSourceOwner(get(f, "sourceOwner")), repo: get(f, "repo"), githubAccount: get(f, "githubAccount"), fullName: get(f, "fullName"),
   studentNumber: get(f, "studentNumber"), studentEmail: get(f, "studentEmail"), classCode: get(f, "classCode"),
   assignment: get(f, "assignment"), sha: get(f, "sha"), score: get(f, "score"), gradedAt: get(f, "gradedAt"),
   late: get(f, "late") === "true", notes: decNotes(get(f, "notes")), aiScore: get(f, "aiScore"),
@@ -82,7 +86,17 @@ const allRows = lines.slice(1).filter(Boolean).map(parseCsvLine).map((f) => ({
 // instructor has not cleared that student, so we never deliver it (same gate
 // canvas-push uses). This keeps a blank aiScore holding a student out of BOTH
 // the student publish and the Canvas push, not just Canvas.
-const held = (r) => policy.get(r.assignment)?.aiGraded && (r.aiScore == null || String(r.aiScore).trim() === "");
+const held = (r) => {
+  const p = policy.get(r.assignment) || {};
+  if (p.aiGraded) {
+    const raw = String(r.aiScore ?? "").trim(), value = Number(raw);
+    const max = p.totalPoints ?? p.autoPoints ?? null;
+    return raw === "" || !Number.isFinite(value) || value < 0 || (max != null && value > max);
+  }
+  // An unbuildable 0/0 result is unavailable evidence, not a publishable zero.
+  const total = Number(String(r.score).split("/")[1]);
+  return !Number.isFinite(total) || total <= 0;
+};
 
 // The grade the student actually holds, in the activity's own points - the same
 // number canvas-push writes. An AI-graded activity's grade is the reviewed
@@ -108,7 +122,7 @@ const displayScore = (r) => {
 
 // Rows in this section, for published activities only, excluding held students.
 const rows = allRows.filter((r) =>
-  r.repo.includes(`-${section}-`) && publishable(r.assignment) && !held(r) && (!onlyRepo || r.repo === onlyRepo));
+  r.repo.replaceAll("_", "-").includes(`-${section}-`) && publishable(r.assignment) && !held(r) && (!onlyRepo || r.repo === onlyRepo));
 if (!rows.length) {
   const flagged = [...policy.entries()].filter(([, p]) => p.publish).map(([id]) => id);
   console.log(`Nothing to publish for section ${section}.`);
@@ -179,7 +193,7 @@ function pushWorkspaceGrades(ws, studentRows) {
   const sorted = [...studentRows].sort((a, b) => a.assignment.localeCompare(b.assignment));
   for (const r of sorted) {
     writeFileSync(`${dir}/grades/${r.assignment}.json`, JSON.stringify({
-      assignment: r.assignment, sourceRepo: r.repo, gradedCommit: r.sha,
+      assignment: r.assignment, sourceOwner: r.sourceOwner || OWNER, sourceRepo: r.repo, gradedCommit: r.sha,
       gradedAt: r.gradedAt, score: displayScore(r), automatedTests: r.score, late: !!r.late,
     }, null, 2) + "\n");
     const pngs = previewPngs(r);
@@ -195,10 +209,9 @@ function pushWorkspaceGrades(ws, studentRows) {
       ].join("\n"));
     }
   }
-  // Consolidated, student-facing feedback (no scores / no tooling attribution).
-  // The instructor half of gradebook/notes/<id>/<repo>.md stays teacher-side, but
-  // a medium/high authorship estimate adds one fixed, non-accusatory line here
-  // (same wording the Canvas comment carries) so the student knows it was noticed.
+  // Consolidated student-facing feedback comes from reviewed prose only.
+  // The instructor half and authorship estimates remain teacher-side. The
+  // legacy notice helper does not derive a warning from those private estimates.
   const fbRows = sorted.filter((r) => r.notes);
   if (fbRows.length) {
     writeFileSync(`${dir}/FEEDBACK.md`, [
@@ -215,7 +228,7 @@ function pushWorkspaceGrades(ws, studentRows) {
     "| Assignment | Grade | Feedback | Preview | Late | Submission | Graded |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     ...sorted.map((r) =>
-      `| ${r.assignment} | ${displayScore(r)} | ${r.notes ? "[see](./FEEDBACK.md)" : ""} | ${r._wsPreview ? `[pages](${r._wsPreview})` : ""} | ${r.late ? "LATE" : ""} | [\`${r.sha.slice(0, 7)}\`](https://github.com/${OWNER}/${r.repo}/commit/${r.sha}) | ${r.gradedAt.slice(0, 16).replace("T", " ")} |`),
+      `| ${r.assignment} | ${displayScore(r)} | ${r.notes ? "[see](./FEEDBACK.md)" : ""} | ${r._wsPreview ? `[pages](${r._wsPreview})` : ""} | ${r.late ? "LATE" : ""} | [\`${r.sha.slice(0, 7)}\`](https://github.com/${r.sourceOwner || OWNER}/${r.repo}/commit/${r.sha}) | ${r.gradedAt.slice(0, 16).replace("T", " ")} |`),
     "", "_Grades issued by the instructor. Source of truth is the teacher gradebook._", "",
   ].join("\n");
   writeFileSync(`${dir}/GRADES.md`, md);
@@ -223,12 +236,36 @@ function pushWorkspaceGrades(ws, studentRows) {
   // FEEDBACK.md may have never existed in this workspace (no feedback yet);
   // git add fails on a pathspec that matches neither worktree nor index.
   try { quiet(`git -C ${dir} add -A FEEDBACK.md`); } catch {}
-  try {
-    quiet(`git -C ${dir} -c user.name=course-bot -c user.email=course-bot@users.noreply.github.com commit -m ":memo: Update grades"`);
-    quiet(`git -C ${dir} push -q`);
-    console.log(`  published -> ${ws}`);
-  } catch { console.log(`  no changes for ${ws}`); }
+  if (!sh(`git -C ${dir} diff --cached --name-only`)) {
+    console.log(`  no changes for ${ws}`);
+    return;
+  }
+  quiet(`git -C ${dir} -c user.name=course-bot -c user.email=course-bot@users.noreply.github.com commit -m ":memo: Update grades"`);
+  quiet(`git -C ${dir} push -q`);
+  console.log(`  published -> ${ws}`);
 }
+
+// One receipt and table row per activity. Distinct marks require an instructor
+// decision; equivalent marks use the same latest-graded rule as Canvas.
+const selectPublishedRows = (studentRows) => {
+  const grouped = new Map();
+  for (const row of studentRows) {
+    if (!grouped.has(row.assignment)) grouped.set(row.assignment, []);
+    grouped.get(row.assignment).push(row);
+  }
+  return [...grouped.values()].map((candidates) => {
+    if (new Set(candidates.map(displayScore)).size > 1) {
+      throw new Error("Conflicting duplicate activity marks; resolve before publication");
+    }
+    const sorted = [...candidates].sort((a, b) => b.gradedAt.localeCompare(a.gradedAt));
+    const latest = sorted[0];
+    const ties = sorted.filter(r => r.gradedAt === latest.gradedAt);
+    if (new Set(ties.map(r => JSON.stringify([r.sourceOwner || OWNER, r.repo, r.sha, r.notes]))).size > 1) {
+      throw new Error("Ambiguous duplicate activity sources; resolve before publication");
+    }
+    return latest;
+  });
+};
 
 // ---- group by workspace + go --------------------------------------------
 const byWs = new Map();
@@ -238,6 +275,8 @@ for (const r of rows) {
   if (!byWs.has(ws)) byWs.set(ws, []);
   byWs.get(ws).push(r);
 }
+// Resolve every workspace before the first student write.
+for (const [ws, rs] of byWs) byWs.set(ws, selectPublishedRows(rs));
 console.log(`publish: section ${section}, ${rows.length} graded row(s) across ${byWs.size} workspace(s) (${execute ? "EXECUTE" : "DRY RUN"})`);
 const flagged = [...policy.entries()].filter(([, p]) => p.publish).map(([id]) => id);
 console.log(`published activities: ${flagged.join(", ") || "(none)"}`);
