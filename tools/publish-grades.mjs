@@ -19,7 +19,7 @@ import { execSync } from "node:child_process";
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, cpSync, readdirSync,
 } from "node:fs";
-import { loadPolicy, authorshipNotice, resolveSourceOwner } from "./lib/gradebook.mjs";
+import { loadPolicy, authorshipNotice, resolveSourceOwner, validateStudentFeedback } from "./lib/gradebook.mjs";
 
 // The teacher-side note remains private. The legacy notice helper is a no-op;
 // student prose comes only from the explicitly reviewed base64 notes column.
@@ -123,6 +123,8 @@ const displayScore = (r) => {
 // Rows in this section, for published activities only, excluding held students.
 const rows = allRows.filter((r) =>
   r.repo.replaceAll("_", "-").includes(`-${section}-`) && publishable(r.assignment) && !held(r) && (!onlyRepo || r.repo === onlyRepo));
+// Validate all deliverable prose before the first workspace operation.
+for (const row of rows) validateStudentFeedback(row.notes);
 if (!rows.length) {
   const flagged = [...policy.entries()].filter(([, p]) => p.publish).map(([id]) => id);
   console.log(`Nothing to publish for section ${section}.`);

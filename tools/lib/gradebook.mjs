@@ -30,6 +30,40 @@ export const gradeRowKey = (row, fallback = "") => {
   return owner + "/" + repo.toLowerCase() + "|" + assignment.toLowerCase();
 };
 
+// Reviewed student prose must never contain the private note section. Reject a
+// malformed boundary rather than treating the complete draft as student text.
+const PRIVATE_FEEDBACK_MARKER = /^[ \t]*(?:#{1,6}[ \t]+instructor\b|(?:\*{1,2}|_{1,2})?(?:proposed[ \t]+(?:total|score)|AI[- ]authored[ \t]+likelihood|vibecode|authorship[ \t]+(?:estimate|likelihood))(?:\*{1,2}|_{1,2})?[ \t]*:)/im;
+export const validateStudentFeedback = (text) => {
+  const student = String(text || "");
+  if (student.split("\n").some(line => PRIVATE_FEEDBACK_MARKER.test(line.replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/, ""))) || /^---[ \t]*$/m.test(student)) {
+    throw new Error("Private feedback metadata found in student prose; review the feedback before delivery");
+  }
+  return student;
+};
+// Only explicit criterion point allocations belong in a delivered breakdown.
+// Instructor bullets about provenance, authorship or prior marks stay private.
+export const reviewedRubricBreakdown = (text) => {
+  const criterion = /^[-*][ \t]+.+:[ \t]+\d+(?:\.\d+)?[ \t]*\/[ \t]*\d+(?:\.\d+)?(?:[ \t.,;(]|$)/;
+  const privateContext = /\b(?:authorship|AI[- ]authored|vibecode|prior[ \t]+override|previous[ \t]+(?:grade|score)|proposed[ \t]+(?:total|score)|source[ -]hold)\b/i;
+  return String(text || "").split("\n").map(line => line.trim()).filter(line => {
+    const normalized = line.replace(/(\*\*|__)/g, "")
+      .replace(/\*([^*\n]+)\*/g, "$1").replace(/_([^_\n]+)_/g, "$1");
+    if (!criterion.test(normalized) || privateContext.test(normalized)) return false;
+    validateStudentFeedback(normalized);
+    return true;
+  }).join("\n");
+};
+export const splitReviewedFeedback = (text) => {
+  const note = String(text || "").replace(/\r\n/g, "\n");
+  if (!note.trim()) return { student: "", instructor: "" };
+  const boundary = /^---[ \t]*$/m.exec(note);
+  if (!boundary) {
+    throw new Error("Feedback note has no standalone privacy separator; review the note before delivery");
+  }
+  const student = validateStudentFeedback(note.slice(0, boundary.index));
+  return { student, instructor: note.slice(boundary.index + boundary[0].length).trim() };
+};
+
 // ---- CSV helpers (same dialect as grade-sweep.mjs) -----------------------
 export const parseCsvLine = (line) => {
   const out = [];

@@ -56,3 +56,7 @@ Canvas delivery requires readable existing submissions for locked activities and
 ### Source identity during grading and cleanup
 
 A grade row can declare sourceOwner when its repository belongs to a different GitHub account. Blank legacy owners resolve to the configured course owner. Sweep caches, prior reviews and identity updates use the effective owner, repository and activity together. Newly graded rows record the owner actually cloned. A personal-source review never transfers to a same-named course repository. Sibling identity fallback uses only consistent course-owned evidence, and competing source owners keep legacy feedback paths held. Cleanup validates repository names and preserves personal sources when access cannot be confirmed.
+
+### Feedback privacy validation
+
+Delivery rejects nonempty draft notes without a standalone `---` boundary between student prose and the instructor section. It also rejects private score or authorship metadata in student prose. Canvas comments use the separated student section and explicit criterion point allocations; free-form instructor bullets remain private. Workspace feedback uses the reviewed student prose in the gradebook. Repair and individually review malformed feedback before retrying delivery; a reviewed score does not waive this privacy check.

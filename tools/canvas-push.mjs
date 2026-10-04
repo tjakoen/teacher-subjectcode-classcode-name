@@ -30,7 +30,7 @@ import { writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   makeIdResolver, loadPolicy, loadGradebook, consolidate, matchGroups, pointsFor,
-  authorshipNotice, resolveSourceOwner,
+  authorshipNotice, resolveSourceOwner, splitReviewedFeedback, reviewedRubricBreakdown,
 } from "./lib/gradebook.mjs";
 
 // ---- args / env ----------------------------------------------------------
@@ -93,23 +93,13 @@ const readNote = (ourId, repo) => {
 };
 const parseAiNote = (note) => {
   if (!note) return { student: "", breakdown: "" };
-  const cut = note.indexOf("\n---");
-  const head = cut >= 0 ? note.slice(0, cut) : note;
-  const instr = cut >= 0 ? note.slice(cut).replace(/^\s*\n?-{3,}\s*/, "") : "";
+  const { student: head, instructor: instr } = splitReviewedFeedback(note);
   const sl = head.split("\n");
   while (sl.length && (/^#/.test(sl[0].trim()) || /^_.*_$/.test(sl[0].trim()) || sl[0].trim() === "")) sl.shift();
   const student = sl.join("\n").trim();
-  // WHITELIST, not blacklist. This used to drop three known lines and pass
-  // everything else through, which sent free-form reviewer prose ("your prior
-  // override was...", "the sourceless draft...", "rubric-faithful total would be
-  // 64") straight to the student. The comment is only ever meant to be the
-  // rubric breakdown, so keep exactly that shape: per-criterion bullets and the
-  // half/subtotal headers. Anything else in the instructor half stays private by
-  // default, which is the safe direction to fail in.
-  const KEEP = /^(?:[-*]\s+\S)|^(?:automated|design|objective|rubric|manual)\b[^.]*:\s*$|^(?:automated|design|objective|rubric|manual)\s+subtotal\b/i;
-  const breakdown = instr.split("\n")
-    .filter((ln) => KEEP.test(ln.trim()))
-    .join("\n").replace(/^\s+|\s+$/g, "");
+  // Only explicit criterion point allocations are student-facing. Free-form
+  // instructor bullets and private estimates are excluded by the shared guard.
+  const breakdown = reviewedRubricBreakdown(instr);
   return { student, breakdown };
 };
 const buildAiComment = (t, score, pts) => {
