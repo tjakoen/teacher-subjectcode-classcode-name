@@ -285,6 +285,18 @@ export function sourceNote(r) {
 // Returns { row } with the notes-pass row fields, or { skip, reason } when the
 // row must not be drafted at all (a link to ANOTHER student's workspace: a
 // draft from it would grade one student on another's work).
+// The declared deliverable stays first because its authoring history is also
+// read from the first pinned file. Linked documentation keeps its usual order.
+export function selectFinalsPins(a, target, snap) {
+  if (a.deliverable && !target.path) {
+    return [...new Set([a.deliverable, snap.pinned, "README.md"].filter(Boolean))];
+  }
+  if (snap.pinned) return [...new Set([snap.pinned, "README.md"])];
+  if (snap.kind === "file") return target.path;
+  if (!target.path && a.sourceSubpath) return "README.md";
+  return "";
+}
+
 export function resolveFinalsRow({ ws, a, sub, owner, prefix, cache, work, fallback, dryRun = false }) {
   const link = sub?.url || "";
   const L = parseGithubUrl(link);
@@ -385,7 +397,10 @@ export function resolveFinalsRow({ ws, a, sub, owner, prefix, cache, work, fallb
   // (never the whole workspace, which is mostly instructor content).
   let linkedPin = "";
   if (target && a.linkScope === "repo" && target.path) {
-    const inWs = target.full.toLowerCase() === `${owner}/${ws}`.toLowerCase();
+    const [targetOwner, targetRepo] = target.full.split("/");
+    const inWs = target.full.toLowerCase() === `${owner}/${ws}`.toLowerCase()
+      || (a.groupWork && prefix && targetOwner.toLowerCase() === owner.toLowerCase()
+        && targetRepo.toLowerCase().startsWith(prefix.toLowerCase()));
     const wider = inWs ? (a.sourceSubpath || "") : "";
     if (!inWs || (wider && target.path.split("/")[0] === wider)) {
       linkedPin = target.path;
@@ -419,11 +434,7 @@ export function resolveFinalsRow({ ws, a, sub, owner, prefix, cache, work, fallb
   // What to pin to the front of the source: the linked file itself; else, for a
   // whole repository, the activity's declared deliverable, or its README when
   // the activity is a workspace document (the documentation update lives there).
-  let pin = "";
-  if (snap.pinned) pin = [snap.pinned, "README.md"];
-  else if (snap.kind === "file") pin = target.path;
-  else if (!target.path && a.deliverable) pin = a.deliverable;
-  else if (!target.path && a.sourceSubpath) pin = "README.md";
+  const pin = selectFinalsPins(a, target, snap);
   const row = {
     repo: ws, assignment: a.id, score: 0, passed: 0, total: 1, failures: [], notes: "", aiScore: "",
     clone: dest, sourceSubpath: "", pin, scoped: target.scoped,
