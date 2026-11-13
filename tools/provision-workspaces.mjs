@@ -22,8 +22,12 @@
 // workspace: a fresh repo has no collaborators, so without this the student can
 // never see the workspace or the grades we later deliver there. The login is
 // taken from student.json githubAccount (falling back to the repo-name handle,
-// which is often a display name) and verified to exist before the invite; an
-// unresolvable/nonexistent login is warned and skipped, never fatal.
+// which is often a display name) and must belong to the section's student team
+// (an active member or a pending invitation). A repo-name handle can be a first
+// name or a typo that matches a stranger's account, so existing on GitHub is not
+// enough. The team is STUDENT_TEAM env, then `studentTeam` in course.config.json,
+// then the one org team whose slug starts with "<section>-". With no team found,
+// nobody is added. A skipped login is warned, never fatal.
 //
 // DRY RUN BY DEFAULT: prints the plan and touches nothing until --execute.
 //
@@ -158,6 +162,30 @@ const studentJsonFor = (g) => {
 // (often a display name, not a github account); null if we have neither.
 const collaboratorLogin = (sj, handle) => String(sj?.githubAccount || "").trim() || handle || null;
 
+// The section's student team: the only accounts that may be added as collaborators.
+const findStudentTeam = () => {
+  const named = process.env.STUDENT_TEAM || loadConfig().studentTeam;
+  if (named) return named;
+  const slugs = JSON.parse(trySh(`gh api orgs/${OWNER}/teams --paginate -q '[.[].slug]'`) || "[]");
+  const hits = slugs.filter((s) => s.startsWith(`${String(section).toLowerCase()}-`));
+  return hits.length === 1 ? hits[0] : null;
+};
+const STUDENT_TEAM = findStudentTeam();
+const teamLogins = new Set();
+if (STUDENT_TEAM) {
+  for (const path of [`orgs/${OWNER}/teams/${STUDENT_TEAM}/members`, `orgs/${OWNER}/teams/${STUDENT_TEAM}/invitations`]) {
+    const out = trySh(`gh api ${path} --paginate -q '.[] | (.login // .invitee.login // empty)'`) || "";
+    for (const l of out.split("\n")) if (l.trim()) teamLogins.add(l.trim().toLowerCase());
+  }
+}
+// Why a login may not be added, or null when it may.
+const collaboratorBlock = (login) => {
+  if (!login) return "no github login";
+  if (!STUDENT_TEAM) return `no student team found for section ${section} (set STUDENT_TEAM or studentTeam)`;
+  if (!teamLogins.has(login.toLowerCase())) return `"${login}" is not on team ${STUDENT_TEAM}`;
+  return null;
+};
+
 // ---- build the plan ------------------------------------------------------
 const plan = { create: [], scaffold: [], fill: [], collide: [], needIdentity: [], ok: [] };
 for (const g of groups) {
@@ -192,7 +220,7 @@ if (plan.create.length) {
   console.log(`CREATE (${plan.create.length}):`);
   for (const c of plan.create) {
     const login = collaboratorLogin(c.sj, c.handle);
-    console.log(`  ${tag}create ${c.name}${c.hasIdentity ? "" : "  (WARN: no identity in activities - student.json will be blank)"}${login ? `  [+admin collaborator: ${login}]` : "  (WARN: no github login - student cannot be added as collaborator)"}`);
+    console.log(`  ${tag}create ${c.name}${c.hasIdentity ? "" : "  (WARN: no identity in activities - student.json will be blank)"}${collaboratorBlock(login) ? `  (WARN: no collaborator - ${collaboratorBlock(login)})` : `  [+admin collaborator: ${login}]`}`);
   }
   console.log("");
 }
@@ -259,8 +287,8 @@ const pushWorkspace = (repo, sj) => {
 // here only warns - one unresolved student must never abort the whole run.
 const addCollaborator = (repo, sj, handle) => {
   const login = collaboratorLogin(sj, handle);
-  if (!login) { console.log(`  WARN: ${repo} - no github login; student NOT added as collaborator (delivered grades will be invisible)`); return; }
-  if (!trySh(`gh api users/${login} -q .login`)) { console.log(`  WARN: ${repo} - github account "${login}" not found; student NOT added as collaborator`); return; }
+  const block = collaboratorBlock(login);
+  if (block) { console.log(`  WARN: ${repo} - ${block}; student NOT added as collaborator (add them by hand once their login is known)`); return; }
   trySh(`gh api -X PUT repos/${OWNER}/${repo}/collaborators/${login} -f permission=admin`);
   console.log(`  + ${login} added as admin collaborator on ${repo}`);
 };
